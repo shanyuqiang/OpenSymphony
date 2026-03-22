@@ -140,9 +140,10 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _run_loop(self) -> None:
-        interval_s = self.config.polling.interval_ms / 1000
         while not self._stop_event.is_set():
             await self._tick()
+            # Re-read interval each iteration so hot reload takes effect immediately.
+            interval_s = self.config.polling.interval_ms / 1000
             try:
                 await asyncio.wait_for(
                     asyncio.shield(self._stop_event.wait()),
@@ -170,7 +171,12 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _reconcile(self, candidate_ids: set[str]) -> None:
-        """Cancel tasks for running issues that are no longer candidates (gone terminal)."""
+        """Cancel tasks for running issues that are no longer candidates (gone terminal).
+
+        Only cancels issues that have an entry in both _running and _tasks.
+        Issues in _running without a _tasks entry (should not happen with current code)
+        are silently skipped.
+        """
         # Yield once first so any freshly-created tasks have a chance to start
         # (a task cancelled before its first suspension is destroyed silently).
         await asyncio.sleep(0)
@@ -446,7 +452,7 @@ class Orchestrator:
     def _apply_reload(self, new_workflow: Any) -> None:
         """Atomically apply a reloaded WORKFLOW.md.
 
-        Called from the watchdog thread via asyncio.get_event_loop().call_soon_threadsafe().
+        Called from the watchdog thread via asyncio.get_running_loop().call_soon_threadsafe().
         Tracker credentials (endpoint/api_key) are excluded — changing them mid-run
         risks auth inconsistencies and requires a restart.
         """
