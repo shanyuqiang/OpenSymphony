@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +19,7 @@ from symphony.config import (
     WorkspaceConfig,
 )
 from symphony.models import Issue, RetryEntry, RunningEntry, TokenCounts, Workspace, ClaudeResult
-from symphony.orchestrator import Orchestrator
+from symphony.orchestrator import Orchestrator, _sort_candidates
 
 
 # ---------------------------------------------------------------------------
@@ -331,17 +331,13 @@ def test_retry_backoff_formula(tmp_path: Path):
 # _sort_candidates tests
 # ---------------------------------------------------------------------------
 
-from datetime import timedelta
-from symphony.orchestrator import _sort_candidates
-
 
 def _make_issue_for_sort(
     id: str,
     priority: int | None = None,
     created_at: datetime | None = None,
     identifier: str | None = None,
-) -> "Issue":
-    from symphony.models import Issue
+) -> Issue:
     return Issue(
         id=id,
         identifier=identifier or f"owner/repo#{id}",

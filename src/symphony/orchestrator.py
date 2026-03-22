@@ -30,7 +30,7 @@ def _sort_candidates(issues: list[Issue]) -> list[Issue]:
         key=lambda i: (
             i.priority is None,          # False(0) < True(1) → None sorts last
             i.priority if i.priority is not None else 0,
-            i.created_at or datetime.min,
+            i.created_at,
             i.identifier,
         ),
     )
