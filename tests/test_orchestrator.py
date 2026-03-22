@@ -325,3 +325,80 @@ def test_retry_backoff_formula(tmp_path: Path):
     # attempt=100 (very large): capped at max_retry_backoff_ms (300000 ms default)
     orch._schedule_retry(issue, attempt=100, error="e")
     assert orch._retry_queue[-1].due_at_ms <= time.monotonic() * 1000 + 300001
+
+
+# ---------------------------------------------------------------------------
+# _sort_candidates tests
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta
+from symphony.orchestrator import _sort_candidates
+
+
+def _make_issue_for_sort(
+    id: str,
+    priority: int | None = None,
+    created_at: datetime | None = None,
+    identifier: str | None = None,
+) -> "Issue":
+    from symphony.models import Issue
+    return Issue(
+        id=id,
+        identifier=identifier or f"owner/repo#{id}",
+        number=int(id) if id.isdigit() else 0,
+        title=f"Issue {id}",
+        description="desc",
+        state="open",
+        labels=[],
+        priority=priority,
+        created_at=created_at or datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        owner="owner",
+        repo="repo",
+    )
+
+
+def test_sort_candidates_by_priority():
+    """Lower priority number = higher urgency = dispatched first."""
+    now = datetime.now(UTC)
+    issues = [
+        _make_issue_for_sort("3", priority=3, created_at=now),
+        _make_issue_for_sort("1", priority=1, created_at=now),
+        _make_issue_for_sort("2", priority=2, created_at=now),
+    ]
+    result = _sort_candidates(issues)
+    assert [i.id for i in result] == ["1", "2", "3"]
+
+
+def test_sort_candidates_none_priority_last():
+    """None priority sorts after all numeric priorities."""
+    now = datetime.now(UTC)
+    issues = [
+        _make_issue_for_sort("none", priority=None, created_at=now),
+        _make_issue_for_sort("p1", priority=1, created_at=now),
+    ]
+    result = _sort_candidates(issues)
+    assert result[0].id == "p1"
+    assert result[1].id == "none"
+
+
+def test_sort_candidates_created_at_tiebreak():
+    """Same priority: older issue dispatched first."""
+    now = datetime.now(UTC)
+    issues = [
+        _make_issue_for_sort("newer", priority=1, created_at=now),
+        _make_issue_for_sort("older", priority=1, created_at=now - timedelta(hours=1)),
+    ]
+    result = _sort_candidates(issues)
+    assert result[0].id == "older"
+
+
+def test_sort_candidates_identifier_tiebreak():
+    """Same priority + same created_at: lexicographic identifier order."""
+    now = datetime.now(UTC)
+    issues = [
+        _make_issue_for_sort("2", priority=1, created_at=now, identifier="owner/repo#z"),
+        _make_issue_for_sort("1", priority=1, created_at=now, identifier="owner/repo#a"),
+    ]
+    result = _sort_candidates(issues)
+    assert result[0].identifier == "owner/repo#a"

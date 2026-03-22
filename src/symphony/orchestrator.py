@@ -23,6 +23,19 @@ from symphony.workspace import WorkspaceManager
 logger = logging.getLogger(__name__)
 
 
+def _sort_candidates(issues: list[Issue]) -> list[Issue]:
+    """Sort issues per spec §8.2: priority asc (None last) → created_at asc → identifier."""
+    return sorted(
+        issues,
+        key=lambda i: (
+            i.priority is None,          # False(0) < True(1) → None sorts last
+            i.priority if i.priority is not None else 0,
+            i.created_at or datetime.min,
+            i.identifier,
+        ),
+    )
+
+
 class Orchestrator:
     """Main orchestration loop."""
 
@@ -135,30 +148,37 @@ class Orchestrator:
     # Polling
     # ------------------------------------------------------------------
 
-    async def _poll_and_dispatch(self) -> None:
+    async def _poll_and_dispatch(self) -> set[str] | None:
         try:
             raw_issues = await self.tracker.fetch_candidate_issues()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to fetch issues: %s", exc)
-            return
+            return None
 
+        # Parse and sort candidates per spec §8.2
+        candidates: list[Issue] = []
         for raw in raw_issues:
             issue = self._parse_issue(raw)
-            if issue is None:
-                continue
+            if issue is not None:
+                candidates.append(issue)
+        candidates = _sort_candidates(candidates)
+
+        candidate_ids = {i.id for i in candidates}
+
+        for issue in candidates:
             if issue.id in self._claimed:
                 continue
             if not self.label_mgr.should_dispatch(issue):
                 continue
             if issue.blocked_by:
-                logger.debug(
-                    "Issue %s is blocked, skipping", issue.identifier
-                )
+                logger.debug("Issue %s is blocked, skipping", issue.identifier)
                 continue
 
-            # Claim immediately before create_task to close the double-dispatch window
             self._claimed.add(issue.id)
-            asyncio.create_task(self._dispatch(issue), name=f"agent-{issue.id}")
+            task = asyncio.create_task(self._dispatch(issue), name=f"agent-{issue.id}")
+            self._tasks[issue.id] = task
+
+        return candidate_ids
 
     # ------------------------------------------------------------------
     # Dispatch
