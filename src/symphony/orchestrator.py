@@ -158,7 +158,7 @@ class Orchestrator:
         for issue_id in list(self._running):
             if issue_id not in candidate_ids and issue_id in self._tasks:
                 logger.info("Reconciling terminal issue %s — cancelling task", issue_id)
-                self._tasks[issue_id].cancel()
+                self._tasks.pop(issue_id).cancel()
 
     # ------------------------------------------------------------------
     # Polling
