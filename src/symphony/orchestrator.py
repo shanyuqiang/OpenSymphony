@@ -304,9 +304,10 @@ class Orchestrator:
                 self._schedule_retry(issue, attempt + 1, error_msg)
                 # _claimed is retained while issue sits in retry queue
             else:
-                # Agent succeeded but did not mark done — release
+                # Agent succeeded but did not mark done — schedule continuation retry
                 self._tasks.pop(issue.id, None)
-                self._claimed.discard(issue.id)
+                self._schedule_retry(issue, attempt=0, error=None)
+                # _claimed is retained while issue sits in retry queue
 
     # ------------------------------------------------------------------
     # Retry
@@ -318,12 +319,16 @@ class Orchestrator:
                 return entry.attempt
         return 0
 
-    def _schedule_retry(self, issue: Issue, attempt: int, error: str) -> None:
-        # §8.4: delay = min(10000 * 2^(attempt-1), max_retry_backoff_ms)
-        backoff_ms = min(
-            10000 * (2 ** (attempt - 1)),
-            self.config.agent.max_retry_backoff_ms,
-        )
+    def _schedule_retry(self, issue: Issue, attempt: int, error: str | None) -> None:
+        if attempt == 0:
+            # Continuation retry: fixed 1s delay (spec §7.3, §8.4)
+            backoff_ms = 1000
+        else:
+            # §8.4: delay = min(10000 * 2^(attempt-1), max_retry_backoff_ms)
+            backoff_ms = min(
+                10000 * (2 ** (attempt - 1)),
+                self.config.agent.max_retry_backoff_ms,
+            )
         due_at_ms = time.monotonic() * 1000 + backoff_ms
         logger.info(
             "Scheduling retry for %s in %.0f s (attempt %d)",

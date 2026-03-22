@@ -438,6 +438,47 @@ async def test_reconcile_cancels_terminal_issue(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_continuation_retry_on_clean_exit(tmp_path: Path):
+    """Clean exit without symphony-done schedules a 1s continuation retry (attempt=0)."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    issue = Issue(**_make_raw_issue(1, labels=[]))
+    workspace = Workspace(
+        path=tmp_path / "ws" / "owner_repo_1",
+        workspace_key="owner_repo_1",
+        created_now=True,
+    )
+    (tmp_path / "ws" / "owner_repo_1").mkdir(parents=True, exist_ok=True)
+
+    # Simulate having been claimed before _dispatch is called (as _poll_and_dispatch does)
+    orch._claimed.add(issue.id)
+
+    # Agent exits cleanly but issue has NO symphony-done label
+    raw_refreshed = _make_raw_issue(1, labels=["symphony-doing"])
+    refreshed_issue = Issue(**raw_refreshed)
+    mock_result = ClaudeResult(success=True)
+
+    with (
+        patch.object(orch.tracker, "add_label", new_callable=AsyncMock, return_value=True),
+        patch.object(orch.tracker, "remove_label", new_callable=AsyncMock, return_value=True),
+        patch.object(orch.workspace_mgr, "create_for_issue", new_callable=AsyncMock, return_value=workspace),
+        patch.object(orch.agent_runner, "run", new_callable=AsyncMock, return_value=mock_result),
+        patch.object(orch, "_refresh_issue", new_callable=AsyncMock, return_value=refreshed_issue),
+    ):
+        await orch._dispatch(issue)
+
+    # Claim must be retained (issue is in retry queue)
+    assert issue.id in orch._claimed
+    # Retry must be scheduled with attempt=0
+    assert len(orch._retry_queue) == 1
+    assert orch._retry_queue[0].attempt == 0
+    # Backoff must be ~1000ms (not exponential)
+    assert orch._retry_queue[0].due_at_ms <= time.monotonic() * 1000 + 1100
+
+
+@pytest.mark.asyncio
 async def test_reconcile_keeps_active_issue(tmp_path: Path):
     """Running issue present in candidates is NOT cancelled."""
     config = _make_config(tmp_path)
