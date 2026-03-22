@@ -314,6 +314,9 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _get_attempt(self, issue_id: str) -> int:
+        # Returns 0 both for first-run (no queue entry) and continuation
+        # retries (attempt=0 entry) — both render without attempt context
+        # per spec §8.4 "first run semantics".
         for entry in self._retry_queue:
             if entry.issue_id == issue_id:
                 return entry.attempt

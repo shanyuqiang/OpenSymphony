@@ -474,8 +474,10 @@ async def test_continuation_retry_on_clean_exit(tmp_path: Path):
     # Retry must be scheduled with attempt=0
     assert len(orch._retry_queue) == 1
     assert orch._retry_queue[0].attempt == 0
-    # Backoff must be ~1000ms (not exponential)
-    assert orch._retry_queue[0].due_at_ms <= time.monotonic() * 1000 + 1100
+    # Backoff must be ~1000ms (not exponential) — verify both bounds
+    now_ms = time.monotonic() * 1000
+    assert orch._retry_queue[0].due_at_ms >= now_ms + 900
+    assert orch._retry_queue[0].due_at_ms <= now_ms + 1100
 
 
 @pytest.mark.asyncio
