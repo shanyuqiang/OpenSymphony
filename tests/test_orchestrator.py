@@ -500,3 +500,44 @@ async def test_reconcile_keeps_active_issue(tmp_path: Path):
     assert not task.cancelled()
     done.set()
     await task
+
+
+@pytest.mark.asyncio
+async def test_apply_reload_updates_config(tmp_path: Path):
+    """_apply_reload updates polling interval, prompt_template, and semaphore."""
+    import textwrap
+    from symphony.workflow import WorkflowLoader
+
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    original_semaphore = orch._semaphore
+
+    # Build a new Workflow with different interval and concurrency
+    wf_content = textwrap.dedent("""\
+        ---
+        tracker:
+          kind: gitea
+          endpoint: http://localhost:3000/api/v1
+          api_key: token
+          owner: owner
+          repo: repo
+        polling:
+          interval_ms: 7777
+        agent:
+          max_concurrent_agents: 5
+        ---
+        New prompt {{ issue.identifier }}
+    """)
+    wf_file = tmp_path / "WORKFLOW.md"
+    wf_file.write_text(wf_content)
+    loader = WorkflowLoader()
+    new_workflow = loader.load(wf_file)
+
+    orch._apply_reload(new_workflow)
+
+    assert orch.config.polling.interval_ms == 7777
+    assert orch.config.agent.max_concurrent_agents == 5
+    assert orch._semaphore is not original_semaphore
+    assert orch.workflow.prompt_template == "New prompt {{ issue.identifier }}"

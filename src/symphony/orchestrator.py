@@ -18,6 +18,7 @@ from symphony.config import WorkflowConfig
 from symphony.labels import LabelLifecycleManager
 from symphony.models import Issue, RetryEntry, RunningEntry, TokenCounts
 from symphony.tracker.gitea import GiteaTracker
+from symphony.workflow import WorkflowWatcher
 from symphony.workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ class Orchestrator:
         # Optional dashboard state callback
         self._on_state_change: Callable[[], None] | None = None
 
+        self._watcher: WorkflowWatcher | None = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -87,6 +90,19 @@ class Orchestrator:
                 "max_concurrent": self.config.agent.max_concurrent_agents,
             },
         )
+        # Start hot reload watcher if workflow has a file path
+        if hasattr(self.workflow, "path") and self.workflow.path:
+            loop = asyncio.get_event_loop()
+
+            def _threadsafe_reload(new_workflow: Any) -> None:
+                loop.call_soon_threadsafe(self._apply_reload, new_workflow)
+
+            self._watcher = WorkflowWatcher(
+                path=self.workflow.path,
+                on_reload=_threadsafe_reload,
+            )
+            self._watcher.start()
+
         await self._startup_cleanup()
         await self._run_loop()
 
@@ -94,6 +110,9 @@ class Orchestrator:
         """Signal the orchestrator to stop."""
         logger.info("Stop requested")
         self._stop_event.set()
+        if self._watcher:
+            self._watcher.stop()
+            self._watcher = None
 
     # ------------------------------------------------------------------
     # Startup
@@ -423,3 +442,32 @@ class Orchestrator:
                 self._on_state_change()
             except Exception:  # noqa: BLE001
                 pass
+
+    def _apply_reload(self, new_workflow: Any) -> None:
+        """Atomically apply a reloaded WORKFLOW.md.
+
+        Called from the watchdog thread via asyncio.get_event_loop().call_soon_threadsafe().
+        Tracker credentials (endpoint/api_key) are excluded — changing them mid-run
+        risks auth inconsistencies and requires a restart.
+        """
+        old_concurrency = self.config.agent.max_concurrent_agents
+        new_concurrency = new_workflow.config.agent.max_concurrent_agents
+
+        # Update live config fields
+        self.config.polling.interval_ms = new_workflow.config.polling.interval_ms
+        self.config.agent.max_concurrent_agents = new_concurrency
+        self.config.hooks = new_workflow.config.hooks
+        self.config.claude = new_workflow.config.claude
+
+        # Update prompt template
+        self.workflow = new_workflow
+
+        # Replace semaphore if concurrency changed
+        if new_concurrency != old_concurrency:
+            self._semaphore = asyncio.Semaphore(new_concurrency)
+
+        logger.info(
+            "WORKFLOW.md hot-reloaded: interval=%dms concurrency=%d",
+            self.config.polling.interval_ms,
+            new_concurrency,
+        )

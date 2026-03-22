@@ -1,10 +1,18 @@
 # src/symphony/workflow.py
+import logging as _logging
 import re
+from collections.abc import Callable as _Callable
 from pathlib import Path
 from typing import Any
+
 import yaml
 from jinja2 import Environment, StrictUndefined
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
+
 from symphony.config import WorkflowConfig
+
+_watcher_logger = _logging.getLogger(__name__)
 
 
 class Workflow:
@@ -47,3 +55,59 @@ class WorkflowLoader:
 
         config = WorkflowConfig(**config_dict)
         return Workflow(config=config, prompt_template=prompt_template, path=path)
+
+
+class _ReloadHandler(FileSystemEventHandler):
+    """Watchdog handler — reloads WORKFLOW.md on modification."""
+
+    def __init__(
+        self,
+        path: Path,
+        on_reload: _Callable[["Workflow"], None],
+        loader: "WorkflowLoader",
+    ) -> None:
+        super().__init__()
+        self._path = path.resolve()
+        self._on_reload = on_reload
+        self._loader = loader
+
+    def on_modified(self, event: FileSystemEvent) -> None:
+        if event.is_directory:
+            return
+        if Path(event.src_path).resolve() != self._path:
+            return
+        try:
+            workflow = self._loader.load(self._path)
+            self._on_reload(workflow)
+            _watcher_logger.info("WORKFLOW.md reloaded from %s", self._path)
+        except Exception as exc:  # noqa: BLE001
+            _watcher_logger.warning(
+                "WORKFLOW.md reload failed (keeping old config): %s", exc
+            )
+
+
+class WorkflowWatcher:
+    """Watches WORKFLOW.md for changes and calls on_reload with the new Workflow."""
+
+    def __init__(
+        self,
+        path: Path,
+        on_reload: _Callable[["Workflow"], None],
+        loader: WorkflowLoader | None = None,
+    ) -> None:
+        self._path = path.resolve()
+        self._on_reload = on_reload
+        self._loader = loader or WorkflowLoader()
+        self._observer: Observer | None = None
+
+    def start(self) -> None:
+        handler = _ReloadHandler(self._path, self._on_reload, self._loader)
+        self._observer = Observer()
+        self._observer.schedule(handler, str(self._path.parent), recursive=False)
+        self._observer.start()
+
+    def stop(self) -> None:
+        if self._observer is not None:
+            self._observer.stop()
+            self._observer.join()
+            self._observer = None
