@@ -142,7 +142,23 @@ class Orchestrator:
     async def _tick(self) -> None:
         """One iteration: process retries + poll + dispatch."""
         await self._process_retries()
-        await self._poll_and_dispatch()
+        candidate_ids = await self._poll_and_dispatch()
+        if candidate_ids is not None:
+            await self._reconcile(candidate_ids)
+
+    # ------------------------------------------------------------------
+    # Reconciliation
+    # ------------------------------------------------------------------
+
+    async def _reconcile(self, candidate_ids: set[str]) -> None:
+        """Cancel tasks for running issues that are no longer candidates (gone terminal)."""
+        # Yield once first so any freshly-created tasks have a chance to start
+        # (a task cancelled before its first suspension is destroyed silently).
+        await asyncio.sleep(0)
+        for issue_id in list(self._running):
+            if issue_id not in candidate_ids and issue_id in self._tasks:
+                logger.info("Reconciling terminal issue %s — cancelling task", issue_id)
+                self._tasks[issue_id].cancel()
 
     # ------------------------------------------------------------------
     # Polling
@@ -188,6 +204,7 @@ class Orchestrator:
         """Acquire semaphore, create workspace, run agent, handle result."""
         async with self._semaphore:
             if self._stop_event.is_set():
+                self._tasks.pop(issue.id, None)
                 self._claimed.discard(issue.id)
                 return
 
@@ -198,6 +215,7 @@ class Orchestrator:
                     "Failed to add symphony-doing to %s, skipping",
                     issue.identifier,
                 )
+                self._tasks.pop(issue.id, None)
                 self._claimed.discard(issue.id)
                 return
 
@@ -206,6 +224,7 @@ class Orchestrator:
             except Exception as exc:  # noqa: BLE001
                 logger.error("Workspace creation failed for %s: %s", issue.identifier, exc)
                 await self.label_mgr.on_completion_detected(issue)
+                self._tasks.pop(issue.id, None)
                 self._claimed.discard(issue.id)
                 return
 
@@ -230,6 +249,17 @@ class Orchestrator:
 
             try:
                 result = await self.agent_runner.run(issue, workspace, attempt=attempt)
+            except asyncio.CancelledError:
+                logger.info("Agent task cancelled for %s", issue.identifier)
+                # Note: on_completion_detected is a network call; a second cancellation
+                # during it would propagate naturally. Worst case: symphony-doing not
+                # removed; startup cleanup handles it on next restart.
+                await self.label_mgr.on_completion_detected(issue)
+                self._claimed.discard(issue.id)
+                self._tasks.pop(issue.id, None)
+                del self._running[issue.id]
+                self._notify()
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "Agent run raised exception for %s: %s", issue.identifier, exc
@@ -255,6 +285,7 @@ class Orchestrator:
                     issue.identifier,
                     result_tokens.total_tokens,
                 )
+                self._tasks.pop(issue.id, None)
                 self._claimed.discard(issue.id)
                 return
 
@@ -269,10 +300,12 @@ class Orchestrator:
                     attempt,
                     error_msg,
                 )
+                self._tasks.pop(issue.id, None)
                 self._schedule_retry(issue, attempt + 1, error_msg)
                 # _claimed is retained while issue sits in retry queue
             else:
                 # Agent succeeded but did not mark done — release
+                self._tasks.pop(issue.id, None)
                 self._claimed.discard(issue.id)
 
     # ------------------------------------------------------------------
@@ -351,9 +384,10 @@ class Orchestrator:
             self._retry_queue = [
                 e for e in self._retry_queue if e.issue_id != entry.issue_id
             ]
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._dispatch(issue), name=f"agent-retry-{issue.id}"
             )
+            self._tasks[issue.id] = task
 
     # ------------------------------------------------------------------
     # Helpers

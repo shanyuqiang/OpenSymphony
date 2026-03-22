@@ -398,3 +398,62 @@ def test_sort_candidates_identifier_tiebreak():
     ]
     result = _sort_candidates(issues)
     assert result[0].identifier == "owner/repo#a"
+
+
+# ---------------------------------------------------------------------------
+# _reconcile tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconcile_cancels_terminal_issue(tmp_path: Path):
+    """Running issue absent from candidates gets its task cancelled."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    issue = Issue(**_make_raw_issue(1))
+
+    # Simulate a running task
+    cancelled = []
+
+    async def _long_running():
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.append(issue.id)
+            raise
+
+    task = asyncio.create_task(_long_running())
+    orch._tasks[issue.id] = task
+    orch._running[issue.id] = MagicMock()
+
+    # candidate_ids does NOT include issue 1 → it went terminal
+    await orch._reconcile(candidate_ids=set())
+
+    # Give the event loop a tick to propagate cancellation
+    await asyncio.sleep(0)
+
+    assert issue.id in cancelled
+
+
+@pytest.mark.asyncio
+async def test_reconcile_keeps_active_issue(tmp_path: Path):
+    """Running issue present in candidates is NOT cancelled."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    issue = Issue(**_make_raw_issue(1))
+
+    done = asyncio.Event()
+    task = asyncio.create_task(done.wait())
+    orch._tasks[issue.id] = task
+    orch._running[issue.id] = MagicMock()
+
+    # candidate_ids includes issue 1 → still active
+    await orch._reconcile(candidate_ids={issue.id})
+
+    assert not task.cancelled()
+    done.set()
+    await task
