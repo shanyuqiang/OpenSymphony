@@ -92,7 +92,7 @@ class Orchestrator:
         )
         # Start hot reload watcher if workflow has a file path
         if hasattr(self.workflow, "path") and self.workflow.path:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             def _threadsafe_reload(new_workflow: Any) -> None:
                 loop.call_soon_threadsafe(self._apply_reload, new_workflow)
@@ -459,8 +459,12 @@ class Orchestrator:
         self.config.hooks = new_workflow.config.hooks
         self.config.claude = new_workflow.config.claude
 
-        # Update prompt template
+        # Update prompt template and propagate into agent runner
         self.workflow = new_workflow
+        self.agent_runner.workflow = new_workflow
+        self.agent_runner.claude_config = new_workflow.config.claude
+        self.agent_runner.hooks = new_workflow.config.hooks
+        self.agent_runner.agent_config = new_workflow.config.agent
 
         # Replace semaphore if concurrency changed
         if new_concurrency != old_concurrency:

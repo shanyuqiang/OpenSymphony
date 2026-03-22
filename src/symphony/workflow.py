@@ -1,7 +1,7 @@
 # src/symphony/workflow.py
-import logging as _logging
+import logging
 import re
-from collections.abc import Callable as _Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ from watchdog.observers import Observer
 
 from symphony.config import WorkflowConfig
 
-_watcher_logger = _logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Workflow:
@@ -63,7 +63,7 @@ class _ReloadHandler(FileSystemEventHandler):
     def __init__(
         self,
         path: Path,
-        on_reload: _Callable[["Workflow"], None],
+        on_reload: Callable[["Workflow"], None],
         loader: "WorkflowLoader",
     ) -> None:
         super().__init__()
@@ -79,9 +79,9 @@ class _ReloadHandler(FileSystemEventHandler):
         try:
             workflow = self._loader.load(self._path)
             self._on_reload(workflow)
-            _watcher_logger.info("WORKFLOW.md reloaded from %s", self._path)
+            logger.info("WORKFLOW.md reloaded from %s", self._path)
         except Exception as exc:  # noqa: BLE001
-            _watcher_logger.warning(
+            logger.warning(
                 "WORKFLOW.md reload failed (keeping old config): %s", exc
             )
 
@@ -92,7 +92,7 @@ class WorkflowWatcher:
     def __init__(
         self,
         path: Path,
-        on_reload: _Callable[["Workflow"], None],
+        on_reload: Callable[["Workflow"], None],
         loader: WorkflowLoader | None = None,
     ) -> None:
         self._path = path.resolve()

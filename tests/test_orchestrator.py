@@ -541,3 +541,7 @@ async def test_apply_reload_updates_config(tmp_path: Path):
     assert orch.config.agent.max_concurrent_agents == 5
     assert orch._semaphore is not original_semaphore
     assert orch.workflow.prompt_template == "New prompt {{ issue.identifier }}"
+    # AgentRunner must also receive the new workflow so prompts and hooks update live
+    assert orch.agent_runner.workflow.prompt_template == "New prompt {{ issue.identifier }}"
+    assert orch.agent_runner.hooks is new_workflow.config.hooks
+    assert orch.agent_runner.claude_config is new_workflow.config.claude
