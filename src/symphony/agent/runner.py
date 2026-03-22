@@ -79,10 +79,11 @@ class AgentRunner:
                     self.hooks.before_run,
                     workspace.path,
                     self.hooks.timeout_ms,
-                    fatal=False,
+                    fatal=True,  # §5.3.4: before_run failure aborts the current attempt
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("before_run hook error: %s", exc)
+            except RuntimeError as exc:
+                logger.warning("before_run hook aborted attempt for %s: %s", issue.identifier, exc)
+                return ClaudeResult(success=False, error=f"before_run hook failed: {exc}")
 
         result = await run_claude(
             prompt=prompt,

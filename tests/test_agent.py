@@ -194,3 +194,44 @@ async def test_agent_runner_run(tmp_path: Path):
     call_kwargs = mock_run.call_args
     assert "owner/repo#42" in call_kwargs.kwargs["prompt"]
     assert "Test issue" in call_kwargs.kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_before_run_hook_failure_aborts_attempt(tmp_path: Path):
+    """§5.3.4: before_run hook failure must abort the attempt and return failure."""
+    import textwrap
+
+    workflow_content = textwrap.dedent("""\
+        ---
+        tracker:
+          kind: gitea
+          endpoint: http://localhost:3000/api/v1
+          api_key: token
+          owner: owner
+          repo: repo
+        ---
+        Working on {{ issue.identifier }}
+    """)
+    wf_file = tmp_path / "WORKFLOW.md"
+    wf_file.write_text(workflow_content)
+
+    loader = WorkflowLoader()
+    workflow = loader.load(wf_file)
+
+    runner = AgentRunner(
+        workflow=workflow,
+        agent_config=AgentConfig(),
+        claude_config=ClaudeConfig(),
+        hooks=HooksConfig(before_run="exit 1"),  # will fail
+    )
+
+    issue = _make_issue(1)
+    workspace = _make_workspace(tmp_path)
+
+    with patch("symphony.agent.runner.run_claude") as mock_run:
+        result = await runner.run(issue, workspace, attempt=0)
+
+    # run_claude must NOT have been called
+    mock_run.assert_not_called()
+    assert result.success is False
+    assert "before_run hook failed" in (result.error or "")

@@ -42,6 +42,7 @@ class Orchestrator:
 
         # State
         self._running: dict[str, RunningEntry] = {}
+        self._claimed: set[str] = set()  # issue IDs reserved or running (prevents double dispatch)
         self._retry_queue: list[RetryEntry] = []
         self._tasks: dict[str, asyncio.Task] = {}
         self._semaphore = asyncio.Semaphore(config.agent.max_concurrent_agents)
@@ -145,9 +146,7 @@ class Orchestrator:
             issue = self._parse_issue(raw)
             if issue is None:
                 continue
-            if issue.id in self._running or issue.id in {
-                t for t in self._tasks
-            }:
+            if issue.id in self._claimed:
                 continue
             if not self.label_mgr.should_dispatch(issue):
                 continue
@@ -157,6 +156,8 @@ class Orchestrator:
                 )
                 continue
 
+            # Claim immediately before create_task to close the double-dispatch window
+            self._claimed.add(issue.id)
             asyncio.create_task(self._dispatch(issue), name=f"agent-{issue.id}")
 
     # ------------------------------------------------------------------
@@ -167,6 +168,7 @@ class Orchestrator:
         """Acquire semaphore, create workspace, run agent, handle result."""
         async with self._semaphore:
             if self._stop_event.is_set():
+                self._claimed.discard(issue.id)
                 return
 
             # Mark as doing
@@ -176,6 +178,7 @@ class Orchestrator:
                     "Failed to add symphony-doing to %s, skipping",
                     issue.identifier,
                 )
+                self._claimed.discard(issue.id)
                 return
 
             try:
@@ -183,6 +186,7 @@ class Orchestrator:
             except Exception as exc:  # noqa: BLE001
                 logger.error("Workspace creation failed for %s: %s", issue.identifier, exc)
                 await self.label_mgr.on_completion_detected(issue)
+                self._claimed.discard(issue.id)
                 return
 
             attempt = self._get_attempt(issue.id)
@@ -231,6 +235,7 @@ class Orchestrator:
                     issue.identifier,
                     result_tokens.total_tokens,
                 )
+                self._claimed.discard(issue.id)
                 return
 
             # Not marked done — treat as failure
@@ -245,6 +250,10 @@ class Orchestrator:
                     error_msg,
                 )
                 self._schedule_retry(issue, attempt + 1, error_msg)
+                # _claimed is retained while issue sits in retry queue
+            else:
+                # Agent succeeded but did not mark done — release
+                self._claimed.discard(issue.id)
 
     # ------------------------------------------------------------------
     # Retry
@@ -257,8 +266,9 @@ class Orchestrator:
         return 0
 
     def _schedule_retry(self, issue: Issue, attempt: int, error: str) -> None:
+        # §8.4: delay = min(10000 * 2^(attempt-1), max_retry_backoff_ms)
         backoff_ms = min(
-            1000 * (2 ** attempt),
+            10000 * (2 ** (attempt - 1)),
             self.config.agent.max_retry_backoff_ms,
         )
         due_at_ms = time.monotonic() * 1000 + backoff_ms
@@ -305,17 +315,19 @@ class Orchestrator:
                 continue
             issue = issues_by_id.get(entry.issue_id)
             if issue is None:
-                # Issue no longer active — remove from retry
+                # Issue no longer active — release claim
                 self._retry_queue = [
                     e for e in self._retry_queue if e.issue_id != entry.issue_id
                 ]
+                self._claimed.discard(entry.issue_id)
                 continue
             if self.label_mgr.is_completed(issue):
                 self._retry_queue = [
                     e for e in self._retry_queue if e.issue_id != entry.issue_id
                 ]
+                self._claimed.discard(entry.issue_id)
                 continue
-            # Remove from retry queue and re-dispatch
+            # Remove from retry queue and re-dispatch (_claimed stays set)
             self._retry_queue = [
                 e for e in self._retry_queue if e.issue_id != entry.issue_id
             ]

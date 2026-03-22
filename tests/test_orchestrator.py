@@ -200,3 +200,128 @@ async def test_dispatch_failure_schedules_retry(tmp_path: Path):
 
     assert len(orch._retry_queue) == 1
     assert orch._retry_queue[0].issue_id == "1"
+
+
+@pytest.mark.asyncio
+async def test_claimed_set_prevents_double_dispatch(tmp_path: Path):
+    """After create_task, issue should be in _claimed and not re-dispatched."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    from symphony.models import Issue as I
+    issue = I(**_make_raw_issue(1, labels=[]))
+
+    # Manually claim the issue as if create_task was already called
+    orch._claimed.add(issue.id)
+
+    dispatched: list = []
+
+    async def _fake_dispatch(issue):
+        dispatched.append(issue.id)
+
+    raw_issues = [_make_raw_issue(1, labels=[])]
+
+    with patch.object(orch.tracker, "fetch_candidate_issues", new_callable=AsyncMock, return_value=raw_issues):
+        with patch.object(orch, "_dispatch", side_effect=_fake_dispatch):
+            await orch._poll_and_dispatch()
+
+    # Issue is claimed, so _dispatch must NOT be called again
+    assert dispatched == []
+
+
+@pytest.mark.asyncio
+async def test_claimed_released_on_success(tmp_path: Path):
+    """After a successful run, _claimed must be cleared."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    from symphony.models import Issue as I
+    issue = I(**_make_raw_issue(1, labels=[]))
+    workspace = Workspace(
+        path=tmp_path / "ws" / "owner_repo_1",
+        workspace_key="owner_repo_1",
+        created_now=True,
+    )
+    (tmp_path / "ws" / "owner_repo_1").mkdir(parents=True, exist_ok=True)
+
+    raw_refreshed = _make_raw_issue(1, labels=["symphony-doing", "symphony-done"])
+    refreshed_issue = I(**raw_refreshed)
+    mock_result = ClaudeResult(success=True)
+
+    orch._claimed.add(issue.id)  # simulates having been claimed before create_task
+
+    with (
+        patch.object(orch.tracker, "add_label", new_callable=AsyncMock, return_value=True),
+        patch.object(orch.tracker, "remove_label", AsyncMock(return_value=True)),
+        patch.object(orch.workspace_mgr, "create_for_issue", new_callable=AsyncMock, return_value=workspace),
+        patch.object(orch.agent_runner, "run", new_callable=AsyncMock, return_value=mock_result),
+        patch.object(orch, "_refresh_issue", new_callable=AsyncMock, return_value=refreshed_issue),
+    ):
+        await orch._dispatch(issue)
+
+    # Claim must be released after successful completion
+    assert issue.id not in orch._claimed
+
+
+@pytest.mark.asyncio
+async def test_claimed_retained_in_retry_queue(tmp_path: Path):
+    """When a retry is scheduled, _claimed must stay set."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    from symphony.models import Issue as I
+    issue = I(**_make_raw_issue(1, labels=[]))
+    workspace = Workspace(
+        path=tmp_path / "ws" / "owner_repo_1",
+        workspace_key="owner_repo_1",
+        created_now=True,
+    )
+    (tmp_path / "ws" / "owner_repo_1").mkdir(parents=True, exist_ok=True)
+
+    raw_refreshed = _make_raw_issue(1, labels=["symphony-doing"])
+    refreshed_issue = I(**raw_refreshed)
+    mock_result = ClaudeResult(success=False, error="timeout")
+
+    orch._claimed.add(issue.id)
+
+    with (
+        patch.object(orch.tracker, "add_label", new_callable=AsyncMock, return_value=True),
+        patch.object(orch.tracker, "remove_label", AsyncMock(return_value=True)),
+        patch.object(orch.workspace_mgr, "create_for_issue", new_callable=AsyncMock, return_value=workspace),
+        patch.object(orch.agent_runner, "run", new_callable=AsyncMock, return_value=mock_result),
+        patch.object(orch, "_refresh_issue", new_callable=AsyncMock, return_value=refreshed_issue),
+    ):
+        await orch._dispatch(issue)
+
+    # Issue is queued for retry — claim must remain
+    assert issue.id in orch._claimed
+    assert len(orch._retry_queue) == 1
+
+
+def test_retry_backoff_formula(tmp_path: Path):
+    """§8.4: backoff = min(10000 * 2^(attempt-1), max_retry_backoff_ms)."""
+    config = _make_config(tmp_path)
+    workflow = _make_workflow_mock()
+    orch = Orchestrator(config, workflow)
+
+    from symphony.models import Issue as I
+    issue = I(**_make_raw_issue(1))
+
+    # attempt=1: 10000 * 2^0 = 10000 ms
+    orch._schedule_retry(issue, attempt=1, error="e")
+    assert orch._retry_queue[-1].due_at_ms > time.monotonic() * 1000 + 9000
+
+    orch._retry_queue.clear()
+
+    # attempt=2: 10000 * 2^1 = 20000 ms
+    orch._schedule_retry(issue, attempt=2, error="e")
+    assert orch._retry_queue[-1].due_at_ms > time.monotonic() * 1000 + 19000
+
+    orch._retry_queue.clear()
+
+    # attempt=100 (very large): capped at max_retry_backoff_ms (300000 ms default)
+    orch._schedule_retry(issue, attempt=100, error="e")
+    assert orch._retry_queue[-1].due_at_ms <= time.monotonic() * 1000 + 300001
