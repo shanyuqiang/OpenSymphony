@@ -9,7 +9,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+lib/*.so
+lib/*.dylib
 lib64/
 parts/
 sdist/
