@@ -1,0 +1,40 @@
+name: Symphony Task
+description: Symphony-CC가 자동 처리할 작업
+title: "[symphony] "
+labels: ["symphony:ready"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 설명
+      description: 구현할 기능 또는 수정할 버그를 설명하세요.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 작업 유형
+      options:
+        - feature
+        - bugfix
+        - refactor
+    validations:
+      required: false
+  - type: input
+    id: max_budget_usd
+    attributes:
+      label: 최대 예산 (USD)
+      description: 비워두면 config.yaml 기본값 사용
+      placeholder: "5.0"
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 수용 기준
+      description: 완료 조건을 체크리스트로 작성하세요.
+      value: |
+        - [ ] 기준 1
+        - [ ] 기준 2
+    validations:
+      required: false
