@@ -1,0 +1,55 @@
+name: Symphony Task
+description: Symphony-CC 에이전트가 자동으로 처리할 작업을 등록합니다
+title: "[Task]: "
+labels: ["symphony:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        이 템플릿으로 등록된 이슈는 `symphony:ready` 라벨이 자동 부여되어
+        Symphony-CC 에이전트가 자동으로 감지하고 처리합니다.
+
+  - type: textarea
+    id: task-description
+    attributes:
+      label: 작업 설명
+      description: 에이전트가 수행할 작업을 구체적으로 설명해주세요
+      placeholder: |
+        예: lib/runner.py의 _execute_agent 메서드에서 타임아웃 처리를 추가해주세요.
+        현재 에이전트가 무한 대기할 수 있는 문제가 있습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: 완료 조건
+      description: 작업이 완료되었다고 판단할 수 있는 기준을 나열해주세요
+      placeholder: |
+        - [ ] 타임아웃 설정이 config.yaml에서 읽힘
+        - [ ] 타임아웃 초과 시 graceful shutdown
+        - [ ] 관련 테스트 추가
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 작업 범위
+      description: 변경 범위를 선택해주세요
+      options:
+        - 단일 파일 수정
+        - 다중 파일 수정
+        - 새 기능 추가
+        - 버그 수정
+        - 리팩토링
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 추가 컨텍스트
+      description: 에이전트에게 도움이 될 추가 정보가 있다면 작성해주세요
+    validations:
+      required: false
