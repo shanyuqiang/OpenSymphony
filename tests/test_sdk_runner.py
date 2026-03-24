@@ -77,28 +77,28 @@ class TestSDKRunnerMocked:
     @pytest.mark.asyncio
     async def test_successful_run(self) -> None:
         """Successful SDK run returns correct result."""
-        from lib.claude_sdk_runner import SDKAgentRunner, RunResult
+        from lib.claude_sdk_runner import SDKAgentRunner
 
         runner = SDKAgentRunner(timeout_s=30)
 
-        # Mock the SDK query
-        mock_result = MagicMock()
-        mock_result.is_error = False
-        mock_result.result = "Task completed successfully"
-        mock_result.total_cost_usd = 0.25
+        # Mock ResultMessage with proper class name
+        class ResultMessage:
+            def __init__(self):
+                self.is_error = False
+                self.result = "Task completed successfully"
+                self.total_cost_usd = 0.25
+                self.subtype = "success"
+        ResultMessage.__name__ = "ResultMessage"
 
         async def mock_query(*args, **kwargs):
-            yield mock_result
+            yield ResultMessage()
 
         with patch("claude_agent_sdk.query", side_effect=mock_query):
-            # Patch isinstance to recognize mock as ResultMessage
-            with patch("lib.claude_sdk_runner.isinstance") as mock_isinstance:
-                mock_isinstance.return_value = True
-                result = await runner.run(
-                    prompt="Test prompt",
-                    worktree_path=Path("/tmp/test"),
-                    config={"model": "sonnet", "max_budget_usd": 1},
-                )
+            result = await runner.run(
+                prompt="Test prompt",
+                worktree_path=Path("/tmp/test"),
+                config={"model": "sonnet", "max_budget_usd": 1},
+            )
 
         assert result.success is True
         assert "Task completed successfully" in result.output
@@ -189,16 +189,21 @@ class TestSDKRunnerMocked:
         def on_progress(msg: dict) -> None:
             progress_calls.append(msg)
 
-        mock_message = MagicMock()
-        mock_message.type = "assistant"
+        # Mock messages with proper class names
+        class AssistantMessage:
+            content = []
+        AssistantMessage.__name__ = "AssistantMessage"
 
-        mock_result = MagicMock()
-        mock_result.is_error = False
-        mock_result.result = "Done"
+        class ResultMessage:
+            is_error = False
+            result = "Done"
+            total_cost_usd = 0.1
+            subtype = "success"
+        ResultMessage.__name__ = "ResultMessage"
 
         async def mock_query(*args, **kwargs):
-            yield mock_message
-            yield mock_result
+            yield AssistantMessage()
+            yield ResultMessage()
 
         with patch("claude_agent_sdk.query", side_effect=mock_query):
             result = await runner.run(
@@ -209,7 +214,7 @@ class TestSDKRunnerMocked:
             )
 
         assert len(progress_calls) >= 1
-        assert progress_calls[0]["type"] == "assistant"
+        assert progress_calls[0]["type"] == "AssistantMessage"
 
 
 class TestSDKRunnerOptions:

@@ -103,66 +103,54 @@ class SDKAgentRunner:
             msg_count = 0
             async for message in query(prompt=prompt, options=options):
                 msg_count += 1
-                msg_type = getattr(message, "type", "unknown")
+                # Use type().__name__ to get class name (e.g., "AssistantMessage")
+                msg_type = type(message).__name__
+                subtype = getattr(message, "subtype", None)
 
-                # Handle result message
-                if isinstance(message, ResultMessage):
+                # Log all messages at debug level
+                if msg_type == "ResultMessage":
                     nonlocal success, cost_usd
                     success = message.is_error is not True
                     if hasattr(message, "result") and message.result:
                         result_text = str(message.result)[:500]
                         output_parts.append(str(message.result))
-                        slog.info(f"[msg#{msg_count}] Result: {result_text}")
+                        slog.info(f"[msg#{msg_count}] ResultMessage({subtype}): {result_text}")
                     if hasattr(message, "total_cost_usd") and message.total_cost_usd:
                         cost_usd = message.total_cost_usd
                     break
 
-                # Log each message with useful details
-                if msg_type == "assistant":
+                elif msg_type == "SystemMessage":
+                    slog.debug(f"[msg#{msg_count}] SystemMessage({subtype})")
+
+                elif msg_type == "AssistantMessage":
                     # Log text content from assistant
-                    if hasattr(message, "content"):
-                        content = message.content
-                        if isinstance(content, list):
-                            for item in content[:3]:  # Limit to first 3 items
-                                if hasattr(item, "type") and item.type == "text":
-                                    text = getattr(item, "text", "")[:200]
-                                    if text:
-                                        slog.info(f"[msg#{msg_count}] Assistant: {text}")
-                                elif hasattr(item, "type") and item.type == "thinking":
-                                    thinking = getattr(item, "thinking", "")[:200]
-                                    if thinking:
-                                        slog.debug(f"[msg#{msg_count}] Thinking: {thinking}")
-                    elif hasattr(message, "text"):
-                        slog.info(f"[msg#{msg_count}] Assistant: {message.text[:200]}")
-
-                elif msg_type == "user":
-                    slog.debug(f"[msg#{msg_count}] User message")
-
-                elif msg_type == "tool_use":
-                    tool_name = getattr(message, "name", "unknown")
-                    tool_input = getattr(message, "input", {})
-                    if isinstance(tool_input, dict):
-                        tool_input_str = str(tool_input)[:300]
-                    else:
-                        tool_input_str = str(tool_input)[:300]
-                    slog.info(f"[msg#{msg_count}] Tool use: {tool_name}({tool_input_str})")
-
-                elif msg_type == "tool_result":
-                    content = getattr(message, "content", "")
+                    content = getattr(message, "content", [])
                     if isinstance(content, list):
-                        for item in content[:2]:
-                            result = getattr(item, "content", str(item))[:200]
-                            slog.debug(f"[msg#{msg_count}] Tool result: {result}")
+                        for item in content[:3]:
+                            item_type = getattr(item, "type", "")
+                            if item_type == "text":
+                                text = getattr(item, "text", "")[:200]
+                                if text:
+                                    slog.info(f"[msg#{msg_count}] Assistant: {text}")
+                            elif item_type == "thinking":
+                                thinking = getattr(item, "thinking", "")[:100]
+                                if thinking:
+                                    slog.debug(f"[msg#{msg_count}] Thinking: {thinking}")
+                            elif item_type == "tool_use":
+                                tool_name = getattr(item, "name", "unknown")
+                                tool_input = getattr(item, "input", {})
+                                slog.info(f"[msg#{msg_count}] Tool use: {tool_name}({str(tool_input)[:200]})")
+                            elif item_type == "tool_result":
+                                tool_content = getattr(item, "content", "")
+                                slog.debug(f"[msg#{msg_count}] Tool result: {str(tool_content)[:200]}")
                     else:
-                        slog.debug(f"[msg#{msg_count}] Tool result: {str(content)[:200]}")
+                        slog.debug(f"[msg#{msg_count}] Assistant content: {str(content)[:200]}")
 
-                elif msg_type == "result":
-                    result_text = getattr(message, "result", "")[:500]
-                    cost = getattr(message, "cost_usd", 0)
-                    slog.info(f"[msg#{msg_count}] Result: {result_text[:300]} (cost: ${cost})")
+                elif msg_type == "UserMessage":
+                    slog.debug(f"[msg#{msg_count}] UserMessage")
 
                 else:
-                    slog.debug(f"[msg#{msg_count}] Message: {msg_type}")
+                    slog.debug(f"[msg#{msg_count}] {msg_type}({subtype})")
 
                 # Progress callback
                 if on_progress is not None:
