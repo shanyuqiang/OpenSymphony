@@ -1,7 +1,7 @@
-"""오케스트레이터 상태머신 + asyncio 디스패치.
+"""Orchestrator state machine + asyncio dispatch.
 
-비유: 공항 관제탑처럼, 들어오는 이슈(비행기)를 순서대로 배정하고,
-활주로(동시 실행 슬롯)를 관리하며, 실패 시 재시도를 지시한다.
+Like an air traffic control tower, assigns incoming issues (planes) in order,
+manages runways (concurrent slots), and handles retries on failure.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -17,9 +18,11 @@ from typing import Any
 from lib.config import AgentConfig, SymphonyConfig
 from lib.notifier import Notifier, TaskResult
 from lib.runner import AgentRunner, RunResult
-from lib.tracker import Issue
+from lib.tracker import GitHubTracker, Issue
 from lib.workflow import WorkflowConfig, render_hooks, render_workflow
 from lib.workspace import WorkspaceManager
+
+logger = logging.getLogger(__name__)
 
 
 # --- 상태 정의 ---
@@ -177,11 +180,11 @@ class StateStore:
 
 
 class Orchestrator:
-    """이슈 처리 오케스트레이터.
+    """Issue processing orchestrator.
 
-    비유: 관제탑에서 비행기(이슈)의 이착륙을 관리하듯,
-    이슈를 대기열에 넣고, 슬롯이 비면 실행하고,
-    실패하면 재시도하거나 에스컬레이션한다.
+    Like an air traffic control tower, manages incoming issues (planes),
+    puts them in queue, executes when slots are free, retries on failure
+    or escalates.
     """
 
     def __init__(
@@ -192,6 +195,7 @@ class Orchestrator:
         runner: AgentRunner,
         state_dir: Path,
         notifier: Notifier | None = None,
+        tracker: GitHubTracker | None = None,
     ) -> None:
         self.config = config
         self.workflow = workflow
@@ -199,6 +203,7 @@ class Orchestrator:
         self.runner = runner
         self.store = StateStore(state_dir)
         self.notifier = notifier
+        self.tracker = tracker
         self._semaphore = asyncio.Semaphore(config.agent.max_concurrent)
         self._running: dict[int, asyncio.Task[None]] = {}
         self._stop_event = asyncio.Event()
@@ -296,6 +301,7 @@ class Orchestrator:
                     prompt=prompt,
                     worktree_path=wt_path,
                     config=agent_config,
+                    issue_id=issue.number,
                 )
             except Exception as e:
                 result = RunResult(
@@ -326,7 +332,27 @@ class Orchestrator:
                     )
                     await self.notifier.notify("succeeded", task_result)
 
-                # 훅: after_run
+                # Push branch and create PR
+                if self.tracker:
+                    try:
+                        branch_name = f"feat/issue-{issue.number}"
+                        pr_url = await self._push_and_create_pr(
+                            wt_path, branch_name, issue
+                        )
+                        if pr_url:
+                            record.pr_url = pr_url
+                            record.transition(TaskState.PR_CREATED)
+                            self.store.save_active(record)
+                            # Update issue labels
+                            await self.tracker.update_labels(
+                                issue.number,
+                                add_labels=["symphony:done"],
+                                remove_labels=["symphony:in-progress", "symphony:ready"],
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to create PR: %s", e)
+
+                # Hook: after_run
                 if hooks.get("after_run"):
                     await self._run_hook(hooks["after_run"], wt_path)
 
@@ -395,7 +421,7 @@ class Orchestrator:
         return ctx
 
     async def _run_hook(self, script: str, cwd: Path) -> None:
-        """셸 훅 스크립트를 실행한다."""
+        """Run shell hook script."""
         proc = await asyncio.create_subprocess_shell(
             script,
             cwd=cwd,
@@ -403,6 +429,46 @@ class Orchestrator:
             stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate()
+
+    async def _push_and_create_pr(
+        self,
+        worktree_path: Path,
+        branch_name: str,
+        issue: Issue,
+    ) -> str | None:
+        """Push branch to origin and create PR. Returns PR URL."""
+        if not self.tracker:
+            return None
+
+        # Push to tracker repo using full URL (worktree may have wrong remote)
+        remote_url = f"https://github.com/{self.tracker.repo}.git"
+        proc = await asyncio.create_subprocess_exec(
+            "git", "push", remote_url, f"HEAD:{branch_name}",
+            cwd=worktree_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            logger.warning("Git push failed: %s", error_msg)
+            return None
+
+        # Create PR using tracker
+        try:
+            pr_body = issue.body[:500] if issue.body else f"Resolves #{issue.number}"
+            pr_url = await self.tracker.create_pr(
+                issue_number=issue.number,
+                branch=branch_name,
+                title=issue.title,
+                body=pr_body,
+            )
+            logger.info("Created PR: %s", pr_url)
+            return pr_url
+        except Exception as e:
+            logger.warning("Failed to create PR: %s", e)
+            return None
 
     def get_status(self) -> dict[str, Any]:
         """현재 상태 요약을 반환한다."""

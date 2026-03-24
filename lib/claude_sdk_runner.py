@@ -19,6 +19,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_structured_logger(issue_id: int | None = None):
+    """Get structured logger for issue-specific logging."""
+    from lib.logger import get_logger
+
+    return get_logger(
+        name="sdk_runner",
+        session_id="sdk",
+        issue_id=issue_id,
+        console=True,
+    )
+
+
 @dataclass
 class RunResult:
     """Agent execution result."""
@@ -46,6 +58,7 @@ class SDKAgentRunner:
         worktree_path: Path,
         config: dict,
         on_progress: Optional[Callable[[dict], None]] = None,
+        issue_id: Optional[int] = None,
     ) -> RunResult:
         """Run agent using Claude Agent SDK and return result."""
         from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
@@ -65,11 +78,10 @@ class SDKAgentRunner:
             else:
                 tools.append(t)
 
-        logger.info(
-            "SDK agent run: model=%s, budget=$%s, cwd=%s",
-            model,
-            max_budget,
-            worktree_path,
+        # Use structured logger for issue-specific file logging
+        slog = _get_structured_logger(issue_id)
+        slog.info(
+            f"SDK agent run: model={model}, budget=${max_budget}, cwd={worktree_path}"
         )
 
         start = time.monotonic()
@@ -106,7 +118,7 @@ class SDKAgentRunner:
         try:
             await asyncio.wait_for(_run_with_timeout(), timeout=self.timeout_s)
         except asyncio.TimeoutError:
-            logger.warning("SDK agent timeout (%ds)", self.timeout_s)
+            slog.warning(f"SDK agent timeout ({self.timeout_s}s)")
             duration = time.monotonic() - start
             return RunResult(
                 success=False,
@@ -116,7 +128,7 @@ class SDKAgentRunner:
                 exit_code=-1,
             )
         except Exception as e:
-            logger.error("SDK agent run error: %s", e)
+            slog.error(f"SDK agent run error: {e}")
             duration = time.monotonic() - start
             return RunResult(
                 success=False,
@@ -127,6 +139,10 @@ class SDKAgentRunner:
             )
 
         duration = time.monotonic() - start
+        slog.info(
+            f"SDK agent completed: success={success}, cost=${cost_usd:.2f}, "
+            f"duration={duration:.1f}s"
+        )
 
         return RunResult(
             success=success,
