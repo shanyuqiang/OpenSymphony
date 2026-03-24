@@ -13,7 +13,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from lib.config import AgentConfig, SymphonyConfig
 from lib.notifier import Notifier, TaskResult
@@ -168,6 +168,23 @@ class StateStore:
             data = json.loads(path.read_text(encoding="utf-8"))
             records.append(TaskRecord.from_dict(data))
         return records
+
+    def cleanup_orphaned(self, log_fn: Callable[[int, str], None] | None = None) -> list[int]:
+        """Move orphaned active records (terminal states) to completed.
+
+        Called on startup to recover from crashes where move_to_completed
+        wasn't reached (e.g., SIGKILL during post-processing).
+        """
+        orphaned: list[int] = []
+        terminal = {TaskState.SUCCEEDED, TaskState.PR_CREATED, TaskState.ESCALATED}
+        for record in self.list_active():
+            if record.state in terminal:
+                msg = f"Cleaning up orphaned active record: #{record.issue_number} (state={record.state.value})"
+                if log_fn:
+                    log_fn(record.issue_number, msg)
+                self.move_to_completed(record)
+                orphaned.append(record.issue_number)
+        return orphaned
 
     def remove_from_queue(self, issue_number: int) -> None:
         """대기열에서 특정 이슈를 제거한다."""
