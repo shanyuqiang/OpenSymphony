@@ -127,23 +127,24 @@ class SDKAgentRunner:
 
                 elif msg_type == "AssistantMessage":
                     # Log text content from assistant
+                    # Content blocks are dataclass instances: TextBlock, ThinkingBlock, ToolUseBlock
                     content = getattr(message, "content", [])
                     if isinstance(content, list):
-                        for item in content[:3]:
-                            item_type = getattr(item, "type", "")
-                            if item_type == "text":
+                        for item in content[:5]:
+                            item_class = type(item).__name__
+                            if item_class == "TextBlock":
                                 text = getattr(item, "text", "")[:200]
                                 if text:
                                     slog.info(f"[msg#{msg_count}] Assistant: {text}")
-                            elif item_type == "thinking":
+                            elif item_class == "ThinkingBlock":
                                 thinking = getattr(item, "thinking", "")[:100]
                                 if thinking:
-                                    slog.debug(f"[msg#{msg_count}] Thinking: {thinking}")
-                            elif item_type == "tool_use":
+                                    slog.debug(f"[msg#{msg_count}] Thinking: {thinking[:80]}...")
+                            elif item_class == "ToolUseBlock":
                                 tool_name = getattr(item, "name", "unknown")
                                 tool_input = getattr(item, "input", {})
                                 slog.info(f"[msg#{msg_count}] Tool use: {tool_name}({str(tool_input)[:200]})")
-                            elif item_type == "tool_result":
+                            elif item_class == "ToolResultBlock":
                                 tool_content = getattr(item, "content", "")
                                 slog.debug(f"[msg#{msg_count}] Tool result: {str(tool_content)[:200]}")
                     else:
