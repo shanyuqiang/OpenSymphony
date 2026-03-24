@@ -70,8 +70,11 @@ class SDKAgentRunner:
             ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
         )
 
-        # Convert CLI's --allowedTools "Bash(*)" format to SDK list
+        # Convert CLI's --allowedTools "Bash(*),Read(*)" format to SDK list
         tools: list[str] = []
+        # allowed_tools can be a string "Bash(*),Read(*)" or a list
+        if isinstance(allowed_tools, str):
+            allowed_tools = [t.strip() for t in allowed_tools.split(",")]
         for t in allowed_tools:
             if "(" in t:
                 tools.append(t.split("(")[0])
