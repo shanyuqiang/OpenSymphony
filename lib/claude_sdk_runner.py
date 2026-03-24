@@ -149,6 +149,15 @@ class SDKAgentRunner:
                 elif msg_type == "UserMessage":
                     slog.debug(f"[msg#{msg_count}] UserMessage")
 
+                elif msg_type == "StreamEvent":
+                    # StreamEvent contains raw API events
+                    event_type = getattr(message.event, "type", None) if hasattr(message, "event") else None
+                    if event_type == "content_block_delta":
+                        # Don't log every delta, too noisy
+                        pass
+                    elif event_type:
+                        slog.debug(f"[msg#{msg_count}] StreamEvent({event_type})")
+
                 else:
                     slog.debug(f"[msg#{msg_count}] {msg_type}({subtype})")
 
