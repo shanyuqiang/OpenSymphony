@@ -26,3 +26,6 @@ venv/
 ENV/
 symphony_workspaces/
 *.log
+.env
+.DS_Store
+.worktrees/
