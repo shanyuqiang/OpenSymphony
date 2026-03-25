@@ -20,13 +20,15 @@ class WorkspaceError(Exception):
 class WorkspaceManager:
     """git worktree를 사용해 이슈별 격리된 작업 디렉토리를 관리한다."""
 
-    def __init__(self, workspace_root: Path, repo_path: Path) -> None:
+    def __init__(self, workspace_root: Path, repo_path: Path, tracker_repo: str) -> None:
         self.workspace_root = workspace_root
         self.repo_path = repo_path
+        self.tracker_repo = tracker_repo
 
     def _worktree_path(self, issue_number: int) -> Path:
         """이슈 번호로 worktree 경로를 생성한다."""
-        repo_name = self.repo_path.name
+        # tracker_repo에서 repo 이름 추출 (owner/repo -> repo)
+        repo_name = self.tracker_repo.split("/")[-1]
         return self.workspace_root / repo_name / f"issue-{issue_number}"
 
     async def _run_git(self, *args: str, cwd: Optional[Path] = None) -> str:
@@ -58,7 +60,39 @@ class WorkspaceManager:
 
         await self._run_git("worktree", "add", "-b", branch_name, str(wt_path))
         logger.info("worktree 생성: issue #%d -> %s", issue_number, wt_path)
+
+        # worktree의 origin을 tracker_repo로 설정
+        remote_url = f"https://github.com/{self.tracker_repo}.git"
+        # worktree는 부모 repo의 remote를 상속하므로 set-url로 덮어쓰기
+        await self._run_git("remote", "set-url", "origin", remote_url, cwd=wt_path)
+        logger.info("worktree remote 설정: %s -> %s", wt_path, remote_url)
+
+        # Copy .claude/skills to worktree for SDK auto-discovery
+        await self._copy_skills_to_worktree(wt_path)
+
         return wt_path
+
+    async def _copy_skills_to_worktree(self, wt_path: Path) -> None:
+        """Copy .claude/skills from main repo to worktree for SDK auto-discovery."""
+        source_skills = self.repo_path / ".claude" / "skills"
+        if not source_skills.exists():
+            logger.warning("Skills directory not found: %s", source_skills)
+            return
+
+        target_skills = wt_path / ".claude" / "skills"
+        target_skills.parent.mkdir(parents=True, exist_ok=True)
+
+        proc = await asyncio.create_subprocess_exec(
+            "cp", "-r", str(source_skills), str(target_skills),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode == 0:
+            logger.info("Skills copied to worktree: %s", target_skills)
+        else:
+            logger.warning("Failed to copy skills: %s", stderr.decode().strip())
 
     async def get_worktree(self, issue_number: int) -> Optional[Path]:
         """기존 worktree 경로를 반환한다. 없으면 None."""
