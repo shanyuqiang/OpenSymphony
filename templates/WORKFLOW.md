@@ -58,33 +58,32 @@ Skills are pre-loaded from `.claude/skills/`. They are automatically available a
 
 ## Step 2: When you need to commit
 
-Use the **commit** skill to create commits. The skill is already loaded and available.
+INVOKE the commit skill using the Skill tool with name "commit".
 
 ## Step 3: When you need to sync with main
 
-Use the **pull** skill to merge origin/main and resolve conflicts.
+INVOKE the pull skill using the Skill tool with name "pull".
 
 ## Step 4: When you need to push/create PR
 
-Use the **push** skill to push branch and create PR. The label will be automatically updated to `symphony:merging`
+INVOKE the push skill using the Skill tool with name "push". The label will be automatically updated to `symphony:merging`
 
 ## Step 5: When PR is created (symphony:merging) - CRITICAL
 
 **This is the most important step. NEVER merge directly using `gh pr merge`.**
 
-1. Use the **land** skill to monitor CI and review:
-   - Run `python3 .claude/skills/land/land_watch.py`
-   - Wait for it to complete (it monitors CI and review)
-2. **Check exit code**:
-   - If exit code is `0`: Run `gh pr merge --squash --subject "$pr_title" --body "$pr_body"`
-   - If exit code is `2`: Blocking review detected, address feedback and retry from step 1
-   - If exit code is `3`: CI failed, fix issues and retry from step 1
-   - If exit code is `4`: PR head updated, pull changes and retry
-   - If exit code is `5`: Merge conflicts, resolve and retry
-3. **After successful merge**: Labels will be automatically updated to `symphony:done`
+1. **INVOKE the land skill** using the Skill tool with name "land" and await the results.
+2. The land skill will:
+   - Monitor CI checks via `land_watch.py`
+   - Wait for human review approval
+   - Return when ready to merge
+3. **Only after land skill completes successfully**, merge the PR.
+
+**DO NOT** call `gh pr merge` directly without invoking the land skill first.
 
 ## Guardrails
 
-- **NEVER** call `gh pr merge` directly without running `land_watch.py` first
-- **ALWAYS** check `land_watch.py` exit code before merging
+- **NEVER** call `gh pr merge` directly - always INVOKE the land skill first
+- **ALWAYS** use the Skill tool to invoke skills (commit, push, pull, land)
+- **NEVER** bypass skills by running commands directly
 - If blocked by missing tools/auth, report failure and stop
