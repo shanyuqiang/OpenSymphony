@@ -41,7 +41,7 @@ description:
 Use the asyncio watcher to monitor CI checks and review status in parallel:
 
 ```
-python3 .codex/skills/land/land_watch.py
+python3 .claude/skills/land/land_watch.py
 ```
 
 Exit codes:
@@ -71,7 +71,7 @@ if [ "$mergeable" = "CONFLICTING" ]; then
 fi
 
 # Watch CI and review
-python3 .codex/skills/land/land_watch.py
+python3 .claude/skills/land/land_watch.py
 exit_code=$?
 
 case $exit_code in
