@@ -67,7 +67,7 @@ class SDKAgentRunner:
         max_budget = config.get("max_budget_usd", 5)
         allowed_tools = config.get(
             "allowed_tools",
-            ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+            ["Skill", "Bash", "Read", "Write", "Edit", "Glob", "Grep"],
         )
 
         # Convert CLI's --allowedTools "Bash(*),Read(*)" format to SDK list
@@ -98,6 +98,7 @@ class SDKAgentRunner:
             allowed_tools=tools,
             permission_mode="acceptEdits",
             cwd=str(worktree_path),
+            setting_sources=["project"],
             include_partial_messages=True,
         )
 
