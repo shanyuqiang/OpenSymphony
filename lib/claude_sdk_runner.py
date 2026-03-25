@@ -19,6 +19,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _block_pr_merge(tool_name: str, tool_input: dict) -> dict:
+    """Block gh pr merge commands to enforce land skill workflow."""
+    if tool_name == "Bash":
+        command = tool_input.get("command", "")
+        if "pr merge" in command.lower():
+            return {
+                "allow": False,
+                "reason": "Direct 'gh pr merge' is blocked. Use the land skill instead.",
+            }
+    return {"allow": True}
+
+
 def _get_structured_logger(issue_id: int | None = None):
     """Get structured logger for issue-specific logging."""
     from lib.logger import get_logger
@@ -100,6 +112,7 @@ class SDKAgentRunner:
             cwd=str(worktree_path),
             setting_sources=["project"],
             include_partial_messages=True,
+            can_use_tool=_block_pr_merge,
         )
 
         async def _run_with_timeout() -> None:
