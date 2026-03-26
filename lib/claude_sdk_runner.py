@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ResultMessage
+    from claude_agent_sdk.types import ToolPermissionContext
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +25,19 @@ async def _dummy_hook(input_data, tool_use_id, context):
     return {"continue_": True}
 
 
-def _block_pr_merge(tool_name: str, tool_input: dict) -> dict:
+async def _block_pr_merge(
+    tool_name: str, tool_input: dict, context: "ToolPermissionContext"
+):
     """Block gh pr merge commands to enforce land skill workflow."""
+    from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
     if tool_name == "Bash":
         command = tool_input.get("command", "")
         if "pr merge" in command.lower():
-            return {
-                "allow": False,
-                "reason": "Direct 'gh pr merge' is blocked. Use the land skill instead.",
-            }
-    return {"allow": True}
+            return PermissionResultDeny(
+                message="Direct 'gh pr merge' is blocked. Use the land skill instead."
+            )
+    return PermissionResultAllow()
 
 
 def _get_structured_logger(issue_id: int | None = None):
@@ -78,7 +82,7 @@ class SDKAgentRunner:
         issue_id: Optional[int] = None,
     ) -> RunResult:
         """Run agent using Claude Agent SDK and return result."""
-        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, ResultMessage, query
+        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, query
 
         model = config.get("model", "opus")
         max_budget = config.get("max_budget_usd", 5)
