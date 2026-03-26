@@ -252,3 +252,7 @@ pytest --cov=lib
 ## License
 
 [MIT](LICENSE)
+
+## Test
+
+This is a test from issue-45 workspace
