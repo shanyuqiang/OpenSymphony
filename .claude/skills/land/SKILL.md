@@ -23,6 +23,7 @@ The orchestrator will:
 - Wait for human review approval (APPROVED state).
 - Squash-merge the PR once CI is green and review is approved.
 - Do not yield until the PR is merged unless blocked.
+- Update issue labels: `symphony:merging` when starting, `symphony:done` when merged.
 
 ## Preconditions
 
@@ -32,17 +33,19 @@ The orchestrator will:
 
 ## Steps
 
-1. Locate the PR for the current branch.
-2. If the working tree has uncommitted changes, commit with the `commit` skill
+1. Extract issue number from branch name (e.g., `feat/issue-123` → `123`).
+2. Add `symphony:merging` label to the issue (replace `symphony:in-progress`).
+3. Locate the PR for the current branch.
+4. If the working tree has uncommitted changes, commit with the `commit` skill
    and push with the `push` skill before proceeding.
-3. Check mergeability and conflicts against main.
-4. If conflicts exist, use the `pull` skill to fetch/merge `origin/main` and
+5. Check mergeability and conflicts against main.
+6. If conflicts exist, use the `pull` skill to fetch/merge `origin/main` and
    resolve conflicts, then use the `push` skill to publish the updated branch.
-5. Monitor CI checks and human review status using the watch helper.
-6. If CI fails, fix the issue and push updates.
-7. If human review requests changes, address them and push updates.
-8. When CI is green and review is APPROVED, squash-merge.
-9. Report final status.
+7. Monitor CI checks and human review status using the watch helper.
+8. If CI fails, fix the issue and push updates.
+9. If human review requests changes, address them and push updates.
+10. When CI is green and review is APPROVED, squash-merge.
+11. Report final status.
 
 ## Watch Helper
 
@@ -67,6 +70,11 @@ Exit codes:
 ```sh
 # Get PR info
 branch=$(git branch --show-current)
+issue_number=$(echo "$branch" | sed 's/.*issue-//')
+
+# Add symphony:merging label to issue (replace symphony:in-progress)
+gh issue edit "$issue_number" --add-label "symphony:merging" --remove-label "symphony:in-progress" 2>/dev/null || true
+
 pr_number=$(gh pr view --json number -q .number)
 pr_title=$(gh pr view --json title -q .title)
 pr_body=$(gh pr view --json body -q .body)

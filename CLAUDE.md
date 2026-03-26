@@ -1,75 +1,93 @@
-# Symphony-CC
+# CLAUDE.md
 
-Claude Code 특화 자율 오케스트레이션 서비스.
-GitHub 이슈를 감시하고, Claude Code 에이전트를 자동으로 실행하여 작업을 처리한다.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 프로젝트 구조
+## Project Overview
 
-```
-symphony-cc/
-├── bin/                    # CLI 및 셸 스크립트
-│   ├── symphonyctl         # 메인 CLI 진입점
-│   ├── symphony-poller.sh  # 이슈 폴링 데몬
-│   └── agent-runner.sh     # 에이전트 실행 래퍼
-├── lib/                    # Python 핵심 모듈
-│   ├── cli.py              # CLI 명령어 정의
-│   ├── config.py           # config.yaml 파싱 및 검증
-│   ├── tracker.py          # GitHub 이슈 추적기
-│   ├── orchestrator.py     # 작업 스케줄링 및 오케스트레이션
-│   ├── runner.py           # Claude Code 에이전트 실행기
-│   ├── workspace.py        # 작업 디렉토리 관리
-│   ├── workflow.py         # 워크플로우 상태 머신
-│   ├── notifier.py         # GitHub 코멘트 / Slack 알림
-│   ├── dashboard.py        # 상태 대시보드
-│   ├── logger.py           # 구조화 JSON 로깅
-│   └── init.py             # 프로젝트 초기화
-├── templates/              # 워크플로우 및 이슈 템플릿
-├── tests/                  # 테스트
-├── state/                  # 런타임 상태 (git 제외)
-├── logs/                   # 로그 (git 제외)
-├── config.yaml.example     # 설정 예시
-└── pyproject.toml          # 패키지 설정
-```
+Symphony-CC is an autonomous GitHub Issue → PR orchestration service. It polls GitHub for labeled issues, creates isolated git worktrees, runs Claude Code via the Agent SDK, and opens PRs. The agent handles its own PR lifecycle (land skill) inside the session — the orchestrator only manages task state.
 
-## 개발 환경 셋업
+## Common Commands
 
 ```bash
-# 1. 저장소 클론
-git clone https://github.com/your-org/symphony-cc.git
-cd symphony-cc
-
-# 2. 가상환경 생성 및 활성화
-python3.12 -m venv .venv
-source .venv/bin/activate
-
-# 3. 개발 의존성 포함 설치
+# Install dependencies
 pip install -e ".[dev]"
 
-# 4. 설정 파일 복사 후 편집
-cp config.yaml.example config.yaml
-# config.yaml에서 repo, webhook 등 설정
-```
-
-## 테스트 실행
-
-```bash
-# 전체 테스트
+# Run tests
 pytest
+pytest tests/test_orchestrator.py -v
 
-# 특정 모듈 테스트
-pytest tests/test_runner.py
+# Run single test file
+pytest tests/test_sdk_runner.py
 
-# 상세 출력
-pytest -v
+# Start daemon (project must have config.yaml)
+symphonyctl start
+
+# Run in foreground
+symphonyctl start --foreground
+
+# Initialize project
+symphonyctl init --repo owner/repo --budget 5
+
+# Check status
+symphonyctl status
+
+# View logs
+symphonyctl logs --tail 100
+symphonyctl logs --issue 42
 ```
 
-## 컨벤션
+## Architecture
 
-- Python 3.12+, asyncio 기반
-- 타입 힌트 필수
-- 테스트: pytest + pytest-asyncio
-- 로깅: 구조화 JSON 로그
+### Core Components
 
-## 기여
+- **`lib/cli.py`** — `symphonyctl` CLI entry point. `main()` routes to subcommand handlers. Project root discovery walks up from cwd to find `config.yaml`.
+- **`lib/orchestrator.py`** — FSM orchestrator + `StateStore` for JSON persistence. The `_TRANSITIONS` dict defines valid state flows. Crashes are recovered via `cleanup_orphaned()` on startup.
+- **`lib/claude_sdk_runner.py`** — Agent execution via Claude Agent SDK `query()`. This is the primary runner; the old CLI subprocess runner is deprecated.
+- **`lib/tracker.py`** — GitHub tracker via `gh` CLI. `parse_issue_meta()` extracts YAML frontmatter from issue bodies.
+- **`lib/workspace.py`** — Git worktree isolation per issue. Copies `commit`, `pull`, `push`, `land` skills from main repo to each worktree via `_copy_skills_to_worktree()`.
 
-[CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
+### FSM State Machine
+
+```
+QUEUED → PREPARING → RUNNING → SUCCEEDED → PR_CREATED → LANDING
+              ↓           ↓          ↓
+           FAILED     FAILED     FAILED → RETRYING → (back to PREPARING)
+                                           ↓
+                                       ESCALATED
+```
+
+`TaskRecord.transition()` validates transitions against `_TRANSITIONS`. Invalid transitions raise `ValueError`.
+
+### State Persistence (StateStore)
+
+Task state lives in JSON files:
+- `state/queue.json` — pending tasks
+- `state/active/issue-{N}.json` — currently running
+- `state/completed/issue-{N}.json` — finished (terminal states)
+
+### Agent Lifecycle
+
+1. **PREPARING**: Create git worktree branch `feat/issue-{N}`
+2. **RUNNING**: Render workflow template + run SDK agent
+3. **SUCCEEDED**: Agent used land skill inside session → PR created
+4. **LANDING**: Monitoring CI + reviews via land skill
+5. **On failure**: Retry up to `max_retries`, then escalate
+
+### Skills Copied to Worktrees
+
+The agent uses these skills during execution (auto-copied by workspace.py):
+- `commit` — Create commits
+- `pull` — Pull latest main
+- `push` — Push branch
+- `land` — Create PR, monitor CI, handle merge
+
+## Configuration
+
+`config.yaml` with frozen dataclass schema in `lib/config.py`. All values overridable via `SYMPHONY_*` environment variables (e.g., `SYMPHONY_AGENT_MODEL=sonnet`).
+
+## Development Notes
+
+- All config dataclasses are `frozen=True` (immutable)
+- Tests use `pytest-asyncio` with `asyncio_mode = "auto"`
+- `SDKAgentRunner.run()` accepts `on_progress` callback for streaming progress
+- `_block_pr_merge()` in SDK runner blocks direct `gh pr merge` to enforce land skill workflow
