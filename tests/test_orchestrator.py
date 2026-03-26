@@ -1,4 +1,4 @@
-"""orchestrator.py 테스트."""
+"""orchestrator.py tests."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from lib.orchestrator import (
     TaskRecord,
     TaskState,
 )
-from lib.runner import RunResult
+from lib.claude_sdk_runner import RunResult
 from lib.tracker import Issue
 from lib.workflow import WorkflowConfig
 
@@ -27,12 +27,12 @@ from lib.workflow import WorkflowConfig
 
 
 class TestTaskRecord:
-    def test_초기_상태(self) -> None:
+    def test_initial_state(self) -> None:
         record = TaskRecord(issue_number=1, issue_title="test")
         assert record.state == TaskState.QUEUED
         assert record.attempt == 0
 
-    def test_유효한_전이(self) -> None:
+    def test_valid_transition(self) -> None:
         record = TaskRecord(issue_number=1, issue_title="test")
         record.transition(TaskState.PREPARING)
         assert record.state == TaskState.PREPARING
@@ -43,20 +43,20 @@ class TestTaskRecord:
         record.transition(TaskState.SUCCEEDED)
         assert record.state == TaskState.SUCCEEDED
 
-    def test_무효한_전이(self) -> None:
+    def test_invalid_transition(self) -> None:
         record = TaskRecord(issue_number=1, issue_title="test")
-        with pytest.raises(ValueError, match="허용되지 않은"):
-            record.transition(TaskState.RUNNING)  # QUEUED → RUNNING 직접 전이 불가
+        with pytest.raises(ValueError, match="Invalid state transition"):
+            record.transition(TaskState.RUNNING)  # QUEUED -> RUNNING direct transition not allowed
 
-    def test_실패_재시도_전이(self) -> None:
+    def test_retry_transition(self) -> None:
         record = TaskRecord(issue_number=1, issue_title="test")
         record.transition(TaskState.PREPARING)
         record.transition(TaskState.RUNNING)
         record.transition(TaskState.FAILED)
         record.transition(TaskState.RETRYING)
-        record.transition(TaskState.PREPARING)  # RETRYING → PREPARING 가능
+        record.transition(TaskState.PREPARING)  # RETRYING -> PREPARING allowed
 
-    def test_에스컬레이션(self) -> None:
+    def test_escalation(self) -> None:
         record = TaskRecord(issue_number=1, issue_title="test")
         record.transition(TaskState.PREPARING)
         record.transition(TaskState.RUNNING)
@@ -64,10 +64,10 @@ class TestTaskRecord:
         record.transition(TaskState.ESCALATED)
         assert record.state == TaskState.ESCALATED
 
-    def test_직렬화_역직렬화(self) -> None:
+    def test_serialization_deserialization(self) -> None:
         record = TaskRecord(
             issue_number=42,
-            issue_title="버그 수정",
+            issue_title="bug fix",
             state=TaskState.RUNNING,
             attempt=2,
         )
@@ -85,38 +85,38 @@ class TestTaskRecord:
 
 
 class TestStateStore:
-    def test_큐_저장_로드(self, tmp_path: Path) -> None:
+    def test_queue_save_load(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
         records = [
-            TaskRecord(issue_number=1, issue_title="첫번째"),
-            TaskRecord(issue_number=2, issue_title="두번째"),
+            TaskRecord(issue_number=1, issue_title="first"),
+            TaskRecord(issue_number=2, issue_title="second"),
         ]
         store.save_queue(records)
         loaded = store.load_queue()
         assert len(loaded) == 2
         assert loaded[0].issue_number == 1
-        assert loaded[1].issue_title == "두번째"
+        assert loaded[1].issue_title == "second"
 
-    def test_빈_큐_로드(self, tmp_path: Path) -> None:
+    def test_load_empty_queue(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
         assert store.load_queue() == []
 
-    def test_active_저장_로드(self, tmp_path: Path) -> None:
+    def test_active_save_load(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
-        record = TaskRecord(issue_number=7, issue_title="테스트")
+        record = TaskRecord(issue_number=7, issue_title="test")
         store.save_active(record)
 
         loaded = store.load_active(7)
         assert loaded is not None
         assert loaded.issue_number == 7
 
-    def test_active_없는_이슈(self, tmp_path: Path) -> None:
+    def test_active_missing_issue(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
         assert store.load_active(999) is None
 
-    def test_completed로_이동(self, tmp_path: Path) -> None:
+    def test_move_to_completed(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
-        record = TaskRecord(issue_number=3, issue_title="완료 테스트")
+        record = TaskRecord(issue_number=3, issue_title="completed test")
         store.save_active(record)
         store.move_to_completed(record)
 
@@ -124,7 +124,7 @@ class TestStateStore:
         completed_path = tmp_path / "completed" / "issue-3.json"
         assert completed_path.exists()
 
-    def test_큐에서_제거(self, tmp_path: Path) -> None:
+    def test_remove_from_queue(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
         records = [
             TaskRecord(issue_number=1, issue_title="a"),
@@ -138,7 +138,7 @@ class TestStateStore:
         assert len(loaded) == 2
         assert all(r.issue_number != 2 for r in loaded)
 
-    def test_active_목록(self, tmp_path: Path) -> None:
+    def test_list_active(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path)
         store.save_active(TaskRecord(issue_number=1, issue_title="a"))
         store.save_active(TaskRecord(issue_number=5, issue_title="b"))
@@ -153,26 +153,26 @@ class TestStateStore:
 
 
 def _make_config(**overrides: Any) -> SymphonyConfig:
-    """테스트용 SymphonyConfig를 생성한다."""
+    """Create test SymphonyConfig."""
     agent_kwargs = {
         "max_concurrent": 2,
         "max_retries": 3,
-        "retry_delay_s": 0,  # 테스트에서는 대기 없이
+        "retry_delay_s": 0,  # no wait in tests
         **overrides,
     }
     return SymphonyConfig(agent=AgentConfig(**agent_kwargs))
 
 
 def _make_workflow() -> WorkflowConfig:
-    """테스트용 WorkflowConfig를 생성한다."""
+    """Create test WorkflowConfig."""
     return WorkflowConfig(
-        body_template="이슈 #{{issue.number}}: {{issue.title}}\n",
+        body_template="Issue #{{issue.number}}: {{issue.title}}\n",
         hooks={},
     )
 
 
-def _make_issue(number: int = 1, title: str = "테스트 이슈") -> Issue:
-    return Issue(number=number, title=title, body="테스트 본문")
+def _make_issue(number: int = 1, title: str = "test issue") -> Issue:
+    return Issue(number=number, title=title, body="test body")
 
 
 class TestOrchestrator:
@@ -189,7 +189,7 @@ class TestOrchestrator:
         assert record.state == TaskState.QUEUED
         assert record.issue_number == 1
 
-    def test_중복_enqueue_에러(self, tmp_path: Path) -> None:
+    def test_duplicate_enqueue_error(self, tmp_path: Path) -> None:
         config = _make_config()
         orch = Orchestrator(
             config=config,
@@ -199,17 +199,17 @@ class TestOrchestrator:
             state_dir=tmp_path,
         )
         orch.enqueue(_make_issue(1))
-        with pytest.raises(ValueError, match="이미"):
+        with pytest.raises(ValueError, match="already"):
             orch.enqueue(_make_issue(1))
 
     @pytest.mark.asyncio
-    async def test_성공_디스패치(self, tmp_path: Path) -> None:
+    async def test_successful_dispatch(self, tmp_path: Path) -> None:
         workspace = AsyncMock()
         workspace.create_worktree.return_value = tmp_path / "worktree"
 
         runner = AsyncMock()
         runner.run.return_value = RunResult(
-            success=True, output="완료", cost_usd=1.5, duration_s=30.0, exit_code=0
+            success=True, output="done", cost_usd=1.5, duration_s=30.0, exit_code=0
         )
 
         config = _make_config()
@@ -229,15 +229,15 @@ class TestOrchestrator:
         assert record.attempt == 1
 
     @pytest.mark.asyncio
-    async def test_실패_후_재시도_성공(self, tmp_path: Path) -> None:
+    async def test_retry_then_success(self, tmp_path: Path) -> None:
         workspace = AsyncMock()
         workspace.create_worktree.return_value = tmp_path / "worktree"
 
         runner = AsyncMock()
-        # 첫 번째 실패, 두 번째 성공
+        # first fails, second succeeds
         runner.run.side_effect = [
-            RunResult(success=False, output="에러", cost_usd=0.5, duration_s=10.0, exit_code=1),
-            RunResult(success=True, output="성공", cost_usd=1.0, duration_s=20.0, exit_code=0),
+            RunResult(success=False, output="error", cost_usd=0.5, duration_s=10.0, exit_code=1),
+            RunResult(success=True, output="success", cost_usd=1.0, duration_s=20.0, exit_code=0),
         ]
 
         config = _make_config(max_retries=3)
@@ -255,13 +255,13 @@ class TestOrchestrator:
         assert record.cost_usd == 1.5  # 0.5 + 1.0
 
     @pytest.mark.asyncio
-    async def test_max_retries_초과_에스컬레이션(self, tmp_path: Path) -> None:
+    async def test_max_retries_escalation(self, tmp_path: Path) -> None:
         workspace = AsyncMock()
         workspace.create_worktree.return_value = tmp_path / "worktree"
 
         runner = AsyncMock()
         runner.run.return_value = RunResult(
-            success=False, output="에러", cost_usd=0.5, duration_s=5.0, exit_code=1
+            success=False, output="error", cost_usd=0.5, duration_s=5.0, exit_code=1
         )
 
         config = _make_config(max_retries=2)
@@ -278,9 +278,9 @@ class TestOrchestrator:
         assert record.attempt == 2
 
     @pytest.mark.asyncio
-    async def test_워크스페이스_실패(self, tmp_path: Path) -> None:
+    async def test_workspace_failure(self, tmp_path: Path) -> None:
         workspace = AsyncMock()
-        workspace.create_worktree.side_effect = RuntimeError("git 에러")
+        workspace.create_worktree.side_effect = RuntimeError("git error")
 
         config = _make_config(max_retries=1)
         orch = Orchestrator(
@@ -293,7 +293,7 @@ class TestOrchestrator:
 
         record = await orch.dispatch_one(_make_issue(1))
         assert record.state == TaskState.ESCALATED
-        assert "워크스페이스" in record.error
+        assert "Workspace creation failed" in record.error
 
     def test_get_status(self, tmp_path: Path) -> None:
         config = _make_config()
@@ -312,8 +312,8 @@ class TestOrchestrator:
         assert status["active"] == 0
 
     @pytest.mark.asyncio
-    async def test_세마포어_동시성_제한(self, tmp_path: Path) -> None:
-        """max_concurrent=1일 때 동시 실행이 1개로 제한되는지 확인."""
+    async def test_semaphore_concurrency_limit(self, tmp_path: Path) -> None:
+        """Verify that max_concurrent=1 limits concurrent execution to 1."""
         workspace = AsyncMock()
         workspace.create_worktree.return_value = tmp_path / "worktree"
 
@@ -340,7 +340,7 @@ class TestOrchestrator:
             state_dir=tmp_path,
         )
 
-        # 2개 이슈를 동시에 디스패치
+        # dispatch 2 issues concurrently
         results = await asyncio.gather(
             orch.dispatch_one(_make_issue(1)),
             orch.dispatch_one(_make_issue(2)),

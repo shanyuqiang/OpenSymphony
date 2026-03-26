@@ -1,7 +1,7 @@
-"""Rich TUI 대시보드.
+"""Rich TUI Dashboard.
 
-관제탑 모니터처럼 현재 진행 중인 이슈, 대기열, 완료/실패 상태를
-한 화면에서 실시간으로 보여주는 대시보드.
+Real-time monitoring of active issues, queue, and completed/failed states
+like an air traffic control tower.
 """
 
 from __future__ import annotations
@@ -21,13 +21,12 @@ from rich.table import Table
 from rich.text import Text
 
 
-# 프로젝트 기본 state 디렉토리
 _DEFAULT_STATE_DIR = Path(__file__).parent.parent / "state"
 
 
 @dataclass
 class IssueState:
-    """이슈 상태 데이터."""
+    """Issue state data."""
 
     issue_number: int
     title: str = ""
@@ -41,7 +40,7 @@ class IssueState:
 
 
 def _load_json(path: Path) -> Any:
-    """JSON 파일을 안전하게 로드한다. 실패 시 None 반환."""
+    """Load JSON file safely. Returns None on failure."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
@@ -49,7 +48,7 @@ def _load_json(path: Path) -> Any:
 
 
 def _elapsed_str(started_at: str | None) -> str:
-    """시작 시간으로부터 경과 시간을 사람이 읽기 쉬운 형태로 반환한다."""
+    """Format elapsed time from start time in human-readable form."""
     if not started_at:
         return "-"
     try:
@@ -66,16 +65,16 @@ def _elapsed_str(started_at: str | None) -> str:
 
 
 class StateReader:
-    """state/ 디렉토리에서 이슈 상태를 읽는다.
+    """Read issue states from state/ directory.
 
-    서류함에서 각 폴더를 꺼내 현황판에 정리하는 사무원과 같다.
+    Like a clerk organizing files from folders to a status board.
     """
 
     def __init__(self, state_dir: Path | None = None) -> None:
         self.state_dir = state_dir or _DEFAULT_STATE_DIR
 
     def read_queue(self) -> list[IssueState]:
-        """대기열 이슈 목록을 읽는다."""
+        """Read queued issues."""
         data = _load_json(self.state_dir / "queue.json")
         if not isinstance(data, list):
             return []
@@ -89,7 +88,7 @@ class StateReader:
         ]
 
     def read_active(self) -> list[IssueState]:
-        """활성 이슈 목록을 읽는다."""
+        """Read active issues."""
         active_dir = self.state_dir / "active"
         if not active_dir.is_dir():
             return []
@@ -113,7 +112,7 @@ class StateReader:
         return results
 
     def read_completed(self) -> list[IssueState]:
-        """완료/실패 이슈 목록을 읽는다."""
+        """Read completed/failed issues."""
         completed_dir = self.state_dir / "completed"
         if not completed_dir.is_dir():
             return []
@@ -137,7 +136,7 @@ class StateReader:
         return results
 
     def read_all(self) -> dict[str, list[IssueState]]:
-        """모든 상태를 한 번에 읽는다."""
+        """Read all states at once."""
         return {
             "queue": self.read_queue(),
             "active": self.read_active(),
@@ -150,9 +149,9 @@ def build_summary_panel(
     queue: list[IssueState],
     completed: list[IssueState],
 ) -> Panel:
-    """상단 요약 패널을 생성한다.
+    """Build top summary panel.
 
-    대시보드 맨 위의 점수판처럼 핵심 수치를 한 줄로 보여준다.
+    Shows key metrics like a scoreboard at the top of the dashboard.
     """
     succeeded = [c for c in completed if c.status == "SUCCEEDED"]
     failed = [c for c in completed if c.status == "FAILED"]
@@ -170,14 +169,14 @@ def build_summary_panel(
 
 
 def build_active_table(active: list[IssueState]) -> Table:
-    """활성 이슈 테이블을 생성한다."""
-    table = Table(title="활성 이슈", expand=True)
+    """Build active issues table."""
+    table = Table(title="Active Issues", expand=True)
     table.add_column("#", style="cyan", width=6)
-    table.add_column("제목", style="white", ratio=3)
-    table.add_column("상태", style="yellow", width=12)
-    table.add_column("시도", style="blue", width=8)
-    table.add_column("경과", style="green", width=10)
-    table.add_column("비용($)", style="magenta", width=10)
+    table.add_column("Title", style="white", ratio=3)
+    table.add_column("Status", style="yellow", width=12)
+    table.add_column("Attempts", style="blue", width=8)
+    table.add_column("Elapsed", style="green", width=10)
+    table.add_column("Cost($)", style="magenta", width=10)
 
     for issue in active:
         attempt_str = f"{issue.attempt}/{issue.max_retries}" if issue.attempt > 0 else "-"
@@ -191,17 +190,17 @@ def build_active_table(active: list[IssueState]) -> Table:
         )
 
     if not active:
-        table.add_row("-", "대기 중인 작업 없음", "-", "-", "-", "-")
+        table.add_row("-", "No active tasks", "-", "-", "-", "-")
 
     return table
 
 
 def build_queue_table(queue: list[IssueState]) -> Table:
-    """대기열 테이블을 생성한다."""
-    table = Table(title="대기열", expand=True)
+    """Build queue table."""
+    table = Table(title="Queue", expand=True)
     table.add_column("#", style="cyan", width=6)
-    table.add_column("제목", style="white", ratio=3)
-    table.add_column("상태", style="dim", width=12)
+    table.add_column("Title", style="white", ratio=3)
+    table.add_column("Status", style="dim", width=12)
 
     for issue in queue:
         table.add_row(
@@ -211,20 +210,20 @@ def build_queue_table(queue: list[IssueState]) -> Table:
         )
 
     if not queue:
-        table.add_row("-", "대기 중인 이슈 없음", "-")
+        table.add_row("-", "No queued issues", "-")
 
     return table
 
 
 def build_completed_table(completed: list[IssueState], limit: int = 10) -> Table:
-    """최근 완료/실패 이슈 테이블을 생성한다."""
-    table = Table(title="최근 완료/실패", expand=True)
+    """Build recent completed/failed issues table."""
+    table = Table(title="Recent Completed/Failed", expand=True)
     table.add_column("#", style="cyan", width=6)
-    table.add_column("제목", style="white", ratio=3)
-    table.add_column("결과", width=10)
-    table.add_column("비용($)", style="magenta", width=10)
+    table.add_column("Title", style="white", ratio=3)
+    table.add_column("Result", width=10)
+    table.add_column("Cost($)", style="magenta", width=10)
 
-    # 최신 항목부터 표시
+    # Show newest first
     recent = completed[-limit:][::-1]
     for issue in recent:
         status_style = "green" if issue.status == "SUCCEEDED" else "red"
@@ -236,30 +235,30 @@ def build_completed_table(completed: list[IssueState], limit: int = 10) -> Table
         )
 
     if not completed:
-        table.add_row("-", "완료된 작업 없음", "-", "-")
+        table.add_row("-", "No completed tasks", "-", "-")
 
     return table
 
 
 def build_stats_panel(completed: list[IssueState]) -> Panel:
-    """일별 통계 패널을 생성한다."""
+    """Build daily stats panel."""
     total = len(completed)
     succeeded = sum(1 for c in completed if c.status == "SUCCEEDED")
     total_cost = sum(c.cost_usd for c in completed)
     success_rate = (succeeded / total * 100) if total > 0 else 0.0
 
     text = Text()
-    text.append(f"  총 처리: {total}  ", style="bold")
+    text.append(f"  Total: {total}  ", style="bold")
     text.append("|  ", style="dim")
-    text.append(f"성공률: {success_rate:.0f}%  ", style="bold green")
+    text.append(f"Success: {success_rate:.0f}%  ", style="bold green")
     text.append("|  ", style="dim")
-    text.append(f"총 비용: ${total_cost:.2f}", style="bold magenta")
+    text.append(f"Total Cost: ${total_cost:.2f}", style="bold magenta")
 
-    return Panel(text, title="통계", border_style="dim")
+    return Panel(text, title="Stats", border_style="dim")
 
 
 def build_layout(state: dict[str, list[IssueState]]) -> Layout:
-    """전체 대시보드 레이아웃을 조립한다."""
+    """Assemble the full dashboard layout."""
     layout = Layout()
     layout.split_column(
         Layout(name="summary", size=3),
@@ -283,10 +282,9 @@ def build_layout(state: dict[str, list[IssueState]]) -> Layout:
 
 
 class DashboardApp:
-    """TUI 대시보드 애플리케이션.
+    """TUI dashboard application.
 
-    관제탑 모니터처럼 1초마다 화면을 갱신하여
-    실시간 상태를 보여준다.
+    Refreshes screen every second to show real-time status like a control tower.
     """
 
     def __init__(
@@ -299,12 +297,12 @@ class DashboardApp:
         self._running = False
 
     def render_once(self) -> Layout:
-        """화면을 한 번 렌더링한다 (테스트용)."""
+        """Render screen once (for testing)."""
         state = self.reader.read_all()
         return build_layout(state)
 
     def run(self) -> None:
-        """대시보드를 실행한다. Ctrl+C로 종료."""
+        """Run dashboard. Press Ctrl+C to exit."""
         console = Console()
         self._running = True
 
@@ -322,5 +320,5 @@ class DashboardApp:
             self._running = False
 
     def stop(self) -> None:
-        """대시보드를 중지한다."""
+        """Stop the dashboard."""
         self._running = False

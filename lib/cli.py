@@ -15,7 +15,6 @@ from pathlib import Path
 
 from lib.config import load_config, reload_config
 from lib.orchestrator import Orchestrator, StateStore
-from lib.runner import AgentRunner
 from lib.claude_sdk_runner import SDKAgentRunner
 from lib.tracker import GitHubTracker, Issue
 from lib.workflow import load_workflow
@@ -185,11 +184,7 @@ def _make_orchestrator(
         tracker_repo=config.tracker.repo,
     )
 
-    # Create runner based on config
-    if config.agent.runner_kind == "sdk":
-        runner = SDKAgentRunner()
-    else:
-        runner = AgentRunner()
+    runner = SDKAgentRunner()
 
     tracker = GitHubTracker(repo=config.tracker.repo)
 

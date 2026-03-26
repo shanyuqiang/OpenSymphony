@@ -275,31 +275,3 @@ class TestSDKIntegration:
         assert opts.model == "opus"
         assert opts.max_budget_usd == 1
 
-    def test_runner_kind_config(self) -> None:
-        """Config correctly stores runner_kind."""
-        from lib.config import AgentConfig
-
-        config = AgentConfig(runner_kind="sdk")
-        assert config.runner_kind == "sdk"
-
-        config_cli = AgentConfig(runner_kind="cli")
-        assert config_cli.runner_kind == "cli"
-
-    @pytest.mark.asyncio
-    async def test_cli_creates_correct_runner(self) -> None:
-        """CLI creates SDK runner when configured."""
-        from lib.claude_sdk_runner import SDKAgentRunner
-        from lib.config import AgentConfig, SymphonyConfig
-        from lib.runner import AgentRunner
-
-        # Test SDK mode
-        config_sdk = SymphonyConfig(agent=AgentConfig(runner_kind="sdk"))
-        if config_sdk.agent.runner_kind == "sdk":
-            runner = SDKAgentRunner()
-            assert isinstance(runner, SDKAgentRunner)
-
-        # Test CLI mode
-        config_cli = SymphonyConfig(agent=AgentConfig(runner_kind="cli"))
-        if config_cli.agent.runner_kind == "cli":
-            runner = AgentRunner()
-            assert isinstance(runner, AgentRunner)

@@ -20,7 +20,7 @@ agent:
   retry_delay_s: 60
   max_budget_usd: 5
   model: opus
-  allowed_tools: "Bash(*),Read(*),Write(*),Edit(*),Glob(*),Grep(*)"
+  allowed_tools: "Bash(*),Read(*),Write(*),Edit(*),Glob(*),Grep(*),Skill(*)"
 
 hooks:
   after_create: |

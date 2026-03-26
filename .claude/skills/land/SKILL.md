@@ -1,12 +1,20 @@
 ---
 name: land
 description:
-  Land a PR by monitoring CI checks, resolving conflicts, waiting for human review
-  approval, and squash-merging when green; use when asked to land, merge, or
-  shepherd a PR to completion.
+  DEPRECATED - Land is now handled by orchestrator. The orchestrator automatically
+  monitors CI, waits for review, and squash-merges PRs after push. Do NOT invoke
+  this skill manually.
 ---
 
-# Land
+# Land (Deprecated)
+
+**This skill is deprecated. Orchestrator handles land automatically.**
+
+The orchestrator will:
+1. Monitor CI checks and wait for green
+2. Wait for human review approval
+3. Squash-merge when ready
+4. Update issue labels (symphony:done or symphony:failed)
 
 ## Goals
 

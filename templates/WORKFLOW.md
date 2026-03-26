@@ -66,24 +66,18 @@ INVOKE the pull skill using the Skill tool with name "pull".
 
 ## Step 4: When you need to push/create PR
 
-INVOKE the push skill using the Skill tool with name "push". The label will be automatically updated to `symphony:merging`
+INVOKE the push skill using the Skill tool with name "push". The orchestrator will automatically:
+1. Create PR with `symphony:merging` label
+2. Monitor CI checks
+3. Wait for human review approval
+4. Squash-merge when all checks pass
+5. Update label to `symphony:done` on success, `symphony:failed` on failure
 
-## Step 5: When PR is created (symphony:merging) - CRITICAL
-
-**This is the most important step. NEVER merge directly using `gh pr merge`.**
-
-1. **INVOKE the land skill** using the Skill tool with name "land" and await the results.
-2. The land skill will:
-   - Monitor CI checks via `land_watch.py`
-   - Wait for human review approval
-   - Return when ready to merge
-3. **Only after land skill completes successfully**, merge the PR.
-
-**DO NOT** call `gh pr merge` directly without invoking the land skill first.
+**You do NOT need to call the land skill. Simply push and create PR - orchestrator handles the rest.**
 
 ## Guardrails
 
-- **NEVER** call `gh pr merge` directly - always INVOKE the land skill first
-- **ALWAYS** use the Skill tool to invoke skills (commit, push, pull, land)
+- **NEVER** call `gh pr merge` directly
+- **ALWAYS** use the Skill tool to invoke skills (commit, push, pull)
 - **NEVER** bypass skills by running commands directly
 - If blocked by missing tools/auth, report failure and stop
