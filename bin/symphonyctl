@@ -6,4 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT" || exit 1
-exec python3 -c "from lib.cli import main; exit(main())" "$@"
+# Use venv python if available, otherwise fall back to system python3
+if [ -f ".venv/bin/python" ]; then
+    exec .venv/bin/python -c "from lib.cli import main; exit(main())" "$@"
+else
+    exec python3 -c "from lib.cli import main; exit(main())" "$@"
+fi
