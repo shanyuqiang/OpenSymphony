@@ -15,29 +15,8 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ResultMessage
-    from claude_agent_sdk.types import ToolPermissionContext
 
 logger = logging.getLogger(__name__)
-
-
-async def _dummy_hook(input_data, tool_use_id, context):
-    """Dummy hook required to keep stream open when using can_use_tool."""
-    return {"continue_": True}
-
-
-async def _block_pr_merge(
-    tool_name: str, tool_input: dict, context: "ToolPermissionContext"
-):
-    """Block gh pr merge commands to enforce land skill workflow."""
-    from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
-
-    if tool_name == "Bash":
-        command = tool_input.get("command", "")
-        if "pr merge" in command.lower():
-            return PermissionResultDeny(
-                message="Direct 'gh pr merge' is blocked. Use the land skill instead."
-            )
-    return PermissionResultAllow()
 
 
 def _get_structured_logger(issue_id: int | None = None):
@@ -82,13 +61,13 @@ class SDKAgentRunner:
         issue_id: Optional[int] = None,
     ) -> RunResult:
         """Run agent using Claude Agent SDK and return result."""
-        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, query
+        from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
         model = config.get("model", "opus")
         max_budget = config.get("max_budget_usd", 5)
         allowed_tools = config.get(
             "allowed_tools",
-            ["Skill", "Bash", "Read", "Write", "Edit", "Glob", "Grep", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"],
+            ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
         )
 
         # Convert CLI's --allowedTools "Bash(*),Read(*)" format to SDK list
@@ -119,24 +98,13 @@ class SDKAgentRunner:
             allowed_tools=tools,
             permission_mode="acceptEdits",
             cwd=str(worktree_path),
-            system_prompt={"type": "preset", "preset": "claude_code"},
-            setting_sources=["project"],
             include_partial_messages=True,
-            can_use_tool=_block_pr_merge,
-            hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_hook])]},
         )
-
-        # Prompt as AsyncIterable with proper message format for streaming mode
-        async def _prompt_stream():
-            yield {
-                "type": "user",
-                "message": {"role": "user", "content": prompt},
-            }
 
         async def _run_with_timeout() -> None:
             """Run query iteration with timeout wrapper."""
             msg_count = 0
-            async for message in query(prompt=_prompt_stream(), options=options):
+            async for message in query(prompt=prompt, options=options):
                 msg_count += 1
                 # Use type().__name__ to get class name (e.g., "AssistantMessage")
                 msg_type = type(message).__name__
@@ -184,6 +152,19 @@ class SDKAgentRunner:
 
                 elif msg_type == "UserMessage":
                     slog.debug(f"[msg#{msg_count}] UserMessage")
+
+                elif msg_type == "StreamEvent":
+                    # StreamEvent contains raw API events (message.event is a dict)
+                    event_type = None
+                    if hasattr(message, "event") and isinstance(message.event, dict):
+                        event_type = message.event.get("type")
+                    elif hasattr(message, "event"):
+                        event_type = getattr(message.event, "type", None)
+                    if event_type == "content_block_delta":
+                        # Don't log every delta, too noisy
+                        pass
+                    elif event_type:
+                        slog.debug(f"[msg#{msg_count}] StreamEvent({event_type})")
 
                 else:
                     slog.debug(f"[msg#{msg_count}] {msg_type}({subtype})")

@@ -1,254 +1,218 @@
-# Symphony-CC
+# OpenSymphony
 
-![Banner](docs/images/banner.png)
+> Symphony – Turn your issue tracker into an autonomous coding agent orchestrator.
 
-> One GitHub Issue, from code to PR -- autonomous Claude Code orchestration.
-
-![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)
-![License MIT](https://img.shields.io/badge/License-MIT-green)
-![Tests 160 passed](https://img.shields.io/badge/Tests-160%20passed-brightgreen)
-![Version 0.1.0](https://img.shields.io/badge/Version-0.1.0-orange)
+OpenSymphony is a Python implementation of the [OpenAI Symphony](https://github.com/openai/symphony) specification. It connects **Gitea** issues to **Claude Code CLI**, automatically spinning up isolated workspaces and running Claude Code on each issue until it creates a Pull Request.
 
 ---
 
-## What is Symphony-CC?
+## How It Works
 
-Symphony-CC turns GitHub Issues into Pull Requests -- autonomously. It polls your repository for labeled issues, spins up isolated git worktrees, runs Claude Code in non-interactive `--print` mode, and opens PRs with the results. A finite state machine (FSM) tracks each task through its lifecycle: **QUEUED -> PREPARING -> RUNNING -> SUCCEEDED / PR_CREATED**, with automatic retries on failure (up to 3 attempts) before escalating. Post an issue, label it, and walk away.
+```
+Gitea Issues  →  Orchestrator  →  Workspace  →  Claude Code CLI  →  Pull Request
+```
+
+1. **Poll** – Symphony polls Gitea for open issues labelled `symphony-doing`.
+2. **Workspace** – An isolated git workspace is cloned for each issue.
+3. **Agent** – Claude Code CLI is invoked with a Jinja2-rendered prompt.
+4. **Loop** – If the agent doesn't finish, Symphony retries with a continuation prompt (up to `max_turns`).
+5. **Done** – When Claude adds the `symphony-done` label, the orchestrator closes the run.
+
+---
 
 ## Features
 
-- **Unattended autonomous execution** -- Label an issue and leave. Symphony handles the rest.
-- **Parallel processing** -- Run up to 2 tasks concurrently, each in its own git worktree.
-- **Automatic retry + escalation** -- Failed tasks retry up to 3 times, then escalate with full logs.
-- **Rich TUI dashboard** -- Real-time view of queues, active tasks, and completion status.
-- **GitHub comments + Slack notifications** -- Get notified on success, failure, or escalation.
-- **Per-issue budget cap** -- Default $5 USD limit per task to prevent runaway costs.
-- **Frontmatter optional** -- Issues work with or without YAML frontmatter.
-- **`/symphony` slash command** -- Integrate directly into your Claude Code workflow.
+- **Gitea tracker** – REST API integration with label-based lifecycle (`symphony-doing` / `symphony-done`)
+- **Claude Code CLI agent** – subprocess-based, with configurable tools and dangerous mode
+- **Isolated workspaces** – each issue gets its own cloned repo directory
+- **Concurrent runs** – configurable `max_concurrent_agents`
+- **Retry with backoff** – exponential back-off up to `max_retry_backoff_ms`
+- **HTTP dashboard** – optional Starlette server for monitoring active runs
+- **WORKFLOW.md config** – single file with YAML front matter + Jinja2 prompt template
 
-![Dashboard](docs/images/dashboard.png)
+---
 
-## Quick Start
+## Requirements
 
-### Prerequisites
+- Python 3.11+
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- A running Gitea instance with API access
 
-- **Python 3.12+**
-- **Claude Code** CLI installed and authenticated
-- **GitHub CLI** (`gh`) installed and authenticated
-- **Git** 2.15+ (worktree support)
+---
 
-### Installation
+## Installation
 
 ```bash
-git clone https://github.com/qjc-office/symphony-cc.git
-cd symphony-cc
+git clone https://github.com/shanyuqiang/OpenSymphony.git
+cd OpenSymphony
+
+# with uv (recommended)
+uv sync
+
+# or with pip
 pip install -e .
 ```
 
-### Usage
+---
 
-**1. Initialize your project:**
+## Quick Start
+
+### 1. Copy the workflow template
 
 ```bash
-cd your-project
-symphonyctl init --repo owner/repo --budget 5
+cp WORKFLOW.md.example WORKFLOW.md
 ```
 
-This creates a `config.yaml` with sensible defaults. Use `--non-interactive` for CI environments.
+### 2. Edit `WORKFLOW.md`
 
-**2. Create a GitHub Issue with the trigger label:**
-
-Add the `symphony:ready` label to any issue. Optionally include YAML frontmatter:
+The file has two parts: a YAML front matter block and a Jinja2 prompt template.
 
 ```markdown
 ---
-mode: feature
-max_iterations: 10
-budget_usd: 3
----
-
-## Task
-
-Add input validation to the /api/users endpoint using zod schemas.
-
-## Acceptance Criteria
-
-- All request bodies validated with zod
-- Error responses follow RFC 7807 format
-- Tests cover valid and invalid inputs
-```
-
-**3. Start Symphony:**
-
-```bash
-# Foreground (see logs in real-time)
-symphonyctl start --foreground
-
-# Background daemon
-symphonyctl start
-
-# Or jump straight to the dashboard
-symphonyctl dashboard
-```
-
-Symphony picks up the issue, creates a worktree, runs Claude Code, and opens a PR.
-
-## Architecture
-
-![Architecture](docs/images/architecture.png)
-
-### FSM State Flow
-
-```
-QUEUED ──> PREPARING ──> RUNNING ──> SUCCEEDED ──> PR_CREATED
-              |             |             |
-              |             v             |
-              |          FAILED ──> RETRYING ──> (back to PREPARING)
-              |                         |
-              |                         v (max retries exceeded)
-              |                     ESCALATED
-              v
-           FAILED (workspace setup error)
-```
-
-### Module Structure
-
-| Module | Responsibility |
-|--------|---------------|
-| `lib/cli.py` | `symphonyctl` CLI -- start, stop, status, dispatch, retry, logs, dashboard, init |
-| `lib/config.py` | YAML config loading with environment variable overrides |
-| `lib/orchestrator.py` | FSM state machine managing the full task lifecycle |
-| `lib/runner.py` | Executes `claude --print` in agent mode |
-| `lib/workspace.py` | Git worktree creation and cleanup for task isolation |
-| `lib/tracker.py` | GitHub Issues polling via `gh` CLI |
-| `lib/notifier.py` | GitHub comment posting and Slack webhook integration |
-| `lib/dashboard.py` | Rich TUI dashboard for real-time monitoring |
-| `lib/init.py` | Project initialization and config scaffolding |
-| `lib/workflow.py` | Workflow template rendering |
-| `lib/logger.py` | Structured JSON logging |
-| `templates/` | WORKFLOW.md, symphony-task.yml, issue-template.md |
-
-## Configuration
-
-Symphony is configured via `config.yaml` at your project root. Every option can be overridden with environment variables.
-
-### Full Configuration Reference
-
-```yaml
 tracker:
-  kind: github
-  repo: owner/repo
-  trigger_label: "symphony:ready"
-  active_labels: ["symphony:in-progress"]
-  terminal_labels: ["symphony:done", "symphony:failed"]
+  kind: gitea
+  endpoint: http://localhost:3000/api/v1
+  api_key: $GITEA_TOKEN          # env var reference
+  owner: myuser
+  repo: myproject
 
 polling:
-  interval_s: 30
+  interval_ms: 30000             # 30 s
 
 workspace:
-  root: ~/symphony-workspaces
+  root: ~/symphony_workspaces
 
 agent:
-  max_concurrent: 2
-  max_retries: 3
-  retry_delay_s: 60
-  max_budget_usd: 5
-  model: opus
-  allowed_tools: "Bash(*),Read(*),Write(*),Edit(*),Glob(*),Grep(*)"
-  default_mode: feature
-  default_max_iterations: 10
+  max_concurrent_agents: 3
+  max_turns: 10
+  max_retry_backoff_ms: 300000
 
-hooks:
-  after_create: ""
-  before_run: ""
-  after_run: ""
+claude:
+  command: claude
+  allowed_tools: ["Edit", "Bash", "Read", "Write"]
+  dangerous_mode: true
+  turn_timeout_ms: 3600000
 
-notifier:
-  github_comment: true
-  slack_webhook_url: ""
-  events: [succeeded, failed, escalated]
+server:
+  port: 8080                     # optional dashboard
+---
+
+# Task
+
+You are working on Gitea Issue: {{ issue.identifier }}
+
+**Title**: {{ issue.title }}
+
+**Description**:
+{{ issue.description }}
+
+## Completion Protocol
+
+When done, add the `symphony-done` label:
+...
 ```
 
-### Environment Variable Overrides
-
-| Variable | Config Path | Example |
-|----------|-------------|---------|
-| `SYMPHONY_AGENT_MAX_CONCURRENT` | `agent.max_concurrent` | `4` |
-| `SYMPHONY_AGENT_MAX_RETRIES` | `agent.max_retries` | `5` |
-| `SYMPHONY_AGENT_RETRY_DELAY_S` | `agent.retry_delay_s` | `120` |
-| `SYMPHONY_AGENT_MAX_BUDGET_USD` | `agent.max_budget_usd` | `10` |
-| `SYMPHONY_AGENT_MODEL` | `agent.model` | `sonnet` |
-| `SYMPHONY_POLLING_INTERVAL_S` | `polling.interval_s` | `60` |
-| `SYMPHONY_WORKSPACE_ROOT` | `workspace.root` | `/tmp/symphony` |
-| `SYMPHONY_TRACKER_REPO` | `tracker.repo` | `owner/repo` |
-| `SYMPHONY_NOTIFIER_SLACK_WEBHOOK` | `notifier.slack_webhook_url` | `https://hooks.slack.com/...` |
-
-Environment variables always take precedence over `config.yaml` values.
-
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `symphonyctl start [-f/--foreground]` | Start the polling loop and orchestrator. Use `-f` to run in the foreground. |
-| `symphonyctl stop` | Stop the background daemon gracefully. |
-| `symphonyctl status` | Show current queue, active tasks, and completed tasks. |
-| `symphonyctl dispatch <issue_number>` | Manually dispatch a specific issue, bypassing the polling loop. |
-| `symphonyctl retry <issue_number>` | Retry a failed issue from scratch. |
-| `symphonyctl logs [--issue N] [--tail N]` | View structured logs. Filter by issue or tail recent entries. |
-| `symphonyctl dashboard` | Launch the Rich TUI dashboard for real-time monitoring. |
-| `symphonyctl init [options]` | Initialize Symphony in the current project. |
-
-### `symphonyctl init` Options
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--repo owner/repo` | GitHub repository | Detected from git remote |
-| `--budget N` | Per-issue budget in USD | `5` |
-| `--workspace-root PATH` | Worktree root directory | `~/symphony-workspaces` |
-| `--non-interactive` | Skip interactive prompts | `false` |
-
-## Notifications
-
-### GitHub Comments
-
-Enabled by default. Symphony posts status updates directly on the issue:
-
-- **On success**: Summary of changes + link to the PR
-- **On failure**: Error logs and retry count
-- **On escalation**: Full diagnostic info for human review
-
-### Slack Webhook
-
-Configure `notifier.slack_webhook_url` in `config.yaml` or set `SYMPHONY_NOTIFIER_SLACK_WEBHOOK`:
-
-```yaml
-notifier:
-  slack_webhook_url: "https://hooks.slack.com/services/T00/B00/xxx"
-  events: [succeeded, failed, escalated]
-```
-
-## Design Decisions
-
-| # | Decision | Rationale |
-|---|----------|-----------|
-| 1 | GitHub Issues via `gh` CLI | No MCP dependency; works everywhere `gh` is installed. |
-| 2 | Python 3.12+ | Native asyncio + subprocess support ideal for orchestration. |
-| 3 | `claude --print` mode | Non-interactive execution suited for autonomous automation. |
-| 4 | JSON-backed FSM | Recoverable state on crash; trivial retry logic. |
-| 5 | `max_concurrent=2` default | Respects Claude Max Plan rate limits out of the box. |
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+### 3. Set environment variables
 
 ```bash
-# Run tests
-pytest
-
-# Run tests with coverage
-pytest --cov=lib
+export GITEA_TOKEN=your_gitea_api_token
 ```
+
+### 4. Run
+
+```bash
+# dry run – validate config only
+symphony ./WORKFLOW.md --dry-run
+
+# start orchestrator
+symphony ./WORKFLOW.md
+```
+
+---
+
+## Issue Lifecycle
+
+| Label | Meaning |
+|-------|---------|
+| `symphony-doing` | Issue is picked up and being processed |
+| `symphony-done` | Agent has finished; awaiting human review |
+
+Add `symphony-doing` to an issue to hand it off to Symphony. Remove or close the issue after reviewing the resulting PR.
+
+---
+
+## Project Structure
+
+```
+OpenSymphony/
+├── src/symphony/
+│   ├── cli.py            # typer CLI entry point
+│   ├── orchestrator.py   # asyncio orchestration loop
+│   ├── workflow.py       # WORKFLOW.md parser (YAML + Jinja2)
+│   ├── workspace.py      # git workspace management
+│   ├── models.py         # shared data models
+│   ├── config.py         # pydantic-settings config
+│   ├── labels.py         # label lifecycle helpers
+│   ├── tracker/
+│   │   ├── base.py       # abstract tracker interface
+│   │   └── gitea.py      # Gitea REST API tracker
+│   ├── agent/
+│   │   ├── runner.py     # agent run loop
+│   │   └── claude_cli.py # Claude Code CLI subprocess wrapper
+│   └── server/
+│       └── dashboard.py  # optional HTTP dashboard
+├── tests/                # pytest test suite
+├── WORKFLOW.md.example   # starter workflow config
+└── pyproject.toml
+```
+
+---
+
+## Development
+
+```bash
+# install dev dependencies
+uv sync --extra dev
+
+# run tests
+pytest -v
+
+# with coverage
+pytest --cov=symphony --cov-report=term-missing
+
+# lint & type check
+ruff check src tests
+mypy src
+```
+
+---
+
+## Configuration Reference
+
+| Section | Key | Default | Description |
+|---------|-----|---------|-------------|
+| `tracker` | `kind` | `gitea` | Tracker backend |
+| `tracker` | `endpoint` | – | Gitea API base URL |
+| `tracker` | `api_key` | – | API token (env var OK) |
+| `polling` | `interval_ms` | `30000` | Poll interval |
+| `agent` | `max_concurrent_agents` | `3` | Parallel agent limit |
+| `agent` | `max_turns` | `10` | Max turns per issue |
+| `agent` | `max_retry_backoff_ms` | `300000` | Retry back-off cap |
+| `claude` | `turn_timeout_ms` | `3600000` | Per-turn timeout |
+| `server` | `port` | `8080` | Dashboard port (0 = disabled) |
+
+---
+
+## Related Projects
+
+| Project | Notes |
+|---------|-------|
+| [openai/symphony](https://github.com/openai/symphony) | Original Elixir spec |
+| [OasAIStudio/symphony-ts](https://github.com/OasAIStudio/symphony-ts) | TypeScript port (Linear + Codex) |
+| [openSymphony (Rust)](https://github.com/shanyuqiang/openSymphony) | Rust port (GitHub + Claude Code) |
+
+---
 
 ## License
 
-[MIT](LICENSE)
+Apache-2.0

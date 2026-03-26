@@ -1,0 +1,65 @@
+---
+tracker:
+  kind: gitea
+  endpoint: http://localhost:3000/api/v1
+  api_key: $GITEA_TOKEN
+  owner: myuser
+  repo: myproject
+  active_states: ["open"]
+  terminal_states: ["closed"]
+
+polling:
+  interval_ms: 30000
+
+workspace:
+  root: ~/symphony_workspaces
+
+agent:
+  max_concurrent_agents: 3
+  max_turns: 10
+  max_retry_backoff_ms: 300000
+
+claude:
+  command: claude
+  allowed_tools: ["Edit", "Bash", "Read", "Write"]
+  dangerous_mode: true
+  turn_timeout_ms: 3600000
+
+server:
+  port: 8080
+---
+
+# 任务说明
+
+你正在处理 Gitea Issue: {{ issue.identifier }}
+
+**标题**: {{ issue.title }}
+
+**描述**:
+{{ issue.description }}
+
+## 工作流程
+
+1. 理解任务需求
+2. 在 workspace 中实现代码
+3. 运行测试验证
+4. 提交代码到分支 `feature/{{ issue.number }}`
+5. 创建 Pull Request
+
+{% if attempt %}
+**注意**: 这是第 {{ attempt }} 次尝试，请检查之前的错误并继续。
+{% endif %}
+
+## 完成协议
+
+当你完成所有工作时，必须执行以下步骤：
+
+1. **添加 `symphony-done` 标签**：
+   ```bash
+   curl -X POST "http://localhost:3000/api/v1/repos/{{ issue.owner }}/{{ issue.repo }}/issues/{{ issue.number }}/labels" \
+     -H "Authorization: token $GITEA_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"labels": ["symphony-done"]}'
+   ```
+
+2. **不要关闭 issue** — 人工将审查并关闭它

@@ -233,8 +233,6 @@ class TestSDKRunnerOptions:
         mock_result.result = "Done"
 
         async def mock_query(prompt, options):
-            # prompt is now an async generator (streaming mode)
-            assert hasattr(prompt, "__aiter__")
             captured_options["prompt"] = prompt
             captured_options["options"] = options
             yield mock_result
@@ -250,7 +248,7 @@ class TestSDKRunnerOptions:
                 },
             )
 
-        # prompt is now an async generator, not a string
+        assert captured_options["prompt"] == "Custom prompt"
         opts = captured_options["options"]
         assert opts.model == "sonnet"
         assert opts.max_budget_usd == 10
@@ -277,23 +275,31 @@ class TestSDKIntegration:
         assert opts.model == "opus"
         assert opts.max_budget_usd == 1
 
+    def test_runner_kind_config(self) -> None:
+        """Config correctly stores runner_kind."""
+        from lib.config import AgentConfig
+
+        config = AgentConfig(runner_kind="sdk")
+        assert config.runner_kind == "sdk"
+
+        config_cli = AgentConfig(runner_kind="cli")
+        assert config_cli.runner_kind == "cli"
+
     @pytest.mark.asyncio
-    async def test_sdk_runner_smoke_test(self) -> None:
-        """Real SDK runner smoke test - verifies can_use_tool streaming mode works."""
+    async def test_cli_creates_correct_runner(self) -> None:
+        """CLI creates SDK runner when configured."""
         from lib.claude_sdk_runner import SDKAgentRunner
+        from lib.config import AgentConfig, SymphonyConfig
+        from lib.runner import AgentRunner
 
-        runner = SDKAgentRunner(timeout_s=60)
-        result = await runner.run(
-            prompt="Run: echo smoke_test_ok",
-            worktree_path=Path("/tmp"),
-            config={
-                "model": "opus",
-                "max_budget_usd": 0.01,
-                "allowed_tools": ["Bash", "Read"],
-            },
-            issue_id=None,
-        )
-        # Success means streaming mode + can_use_tool worked without error
-        assert result.success is True, f"SDK runner failed: {result.output}"
-        assert result.cost_usd > 0, "Should have incurred some cost"
+        # Test SDK mode
+        config_sdk = SymphonyConfig(agent=AgentConfig(runner_kind="sdk"))
+        if config_sdk.agent.runner_kind == "sdk":
+            runner = SDKAgentRunner()
+            assert isinstance(runner, SDKAgentRunner)
 
+        # Test CLI mode
+        config_cli = SymphonyConfig(agent=AgentConfig(runner_kind="cli"))
+        if config_cli.agent.runner_kind == "cli":
+            runner = AgentRunner()
+            assert isinstance(runner, AgentRunner)

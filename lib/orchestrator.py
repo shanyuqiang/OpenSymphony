@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from lib.config import AgentConfig, SymphonyConfig
 from lib.notifier import Notifier, TaskResult
-from lib.claude_sdk_runner import SDKAgentRunner as AgentRunner, RunResult
+from lib.runner import AgentRunner, RunResult
 from lib.tracker import GitHubTracker, Issue
 from lib.workflow import WorkflowConfig, render_hooks, render_workflow
 from lib.workspace import WorkspaceManager
@@ -25,45 +25,41 @@ from lib.workspace import WorkspaceManager
 logger = logging.getLogger(__name__)
 
 
-# --- 状态定义 ---
+# --- 상태 정의 ---
 
 
 class TaskState(str, enum.Enum):
-    """Issue 处理状态。如同机场塔台的状态显示屏。"""
+    """이슈 처리 상태. 관제탑의 비행기 상태판과 같다."""
 
     QUEUED = "QUEUED"
     PREPARING = "PREPARING"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     PR_CREATED = "PR_CREATED"
-    LANDING = "LANDING"  # PR created, monitoring CI + reviews
-    LAND_FAILED = "LAND_FAILED"  # CI failed or review blocked
     FAILED = "FAILED"
     RETRYING = "RETRYING"
     ESCALATED = "ESCALATED"
 
 
-# 允许的状态转换（当前状态 -> 可能的下一个状态）
+# 허용된 상태 전이 (현재 상태 → 가능한 다음 상태들)
 _TRANSITIONS: dict[TaskState, set[TaskState]] = {
     TaskState.QUEUED: {TaskState.PREPARING},
     TaskState.PREPARING: {TaskState.RUNNING, TaskState.FAILED},
     TaskState.RUNNING: {TaskState.SUCCEEDED, TaskState.FAILED},
     TaskState.SUCCEEDED: {TaskState.PR_CREATED},
-    TaskState.PR_CREATED: {TaskState.LANDING},
-    TaskState.LANDING: {TaskState.PR_CREATED, TaskState.LAND_FAILED},  # back to PR_CREATED on conflict resolution
-    TaskState.LAND_FAILED: {TaskState.LANDING},  # retry land
+    TaskState.PR_CREATED: set(),
     TaskState.FAILED: {TaskState.RETRYING, TaskState.ESCALATED},
     TaskState.RETRYING: {TaskState.PREPARING},
     TaskState.ESCALATED: set(),
 }
 
 
-# --- 任务记录 ---
+# --- 태스크 레코드 ---
 
 
 @dataclass
 class TaskRecord:
-    """跟踪 Issue 处理状态的记录。持久化为 JSON。"""
+    """이슈 처리 상태를 추적하는 레코드. JSON으로 영속화된다."""
 
     issue_number: int
     issue_title: str
@@ -79,37 +75,37 @@ class TaskRecord:
     worktree_path: str = ""
 
     def transition(self, new_state: TaskState) -> None:
-        """Transition state. Raises error for invalid transitions."""
+        """상태를 전이한다. 허용되지 않은 전이는 에러."""
         allowed = _TRANSITIONS.get(self.state, set())
         if new_state not in allowed:
             raise ValueError(
-                f"Invalid state transition: {self.state.value} -> {new_state.value}"
+                f"허용되지 않은 상태 전이: {self.state.value} → {new_state.value}"
             )
         self.state = new_state
         self.updated_at = time.time()
 
     def to_dict(self) -> dict[str, Any]:
-        """返回用于 JSON 序列化的字典。"""
+        """JSON 직렬화용 딕셔너리를 반환한다."""
         data = asdict(self)
         data["state"] = self.state.value
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskRecord:
-        """从字典恢复 TaskRecord。"""
+        """딕셔너리에서 TaskRecord를 복원한다."""
         data = {**data}
         data["state"] = TaskState(data["state"])
         return cls(**data)
 
 
-# --- 状态持久化 ---
+# --- 상태 영속화 ---
 
 
 class StateStore:
-    """state/ 目录下的 JSON 文件持久化任务状态。
+    """state/ 디렉토리에 JSON 파일로 태스크 상태를 영속화한다.
 
-    比喻：如同文件柜，进行中的文件放在 active 抽屉，
-    已完成的文件放在 completed 抽屉。
+    비유: 서류 캐비닛처럼, 진행 중인 서류는 active 서랍에,
+    완료된 서류는 completed 서랍에 보관한다.
     """
 
     def __init__(self, state_dir: Path) -> None:
@@ -122,7 +118,7 @@ class StateStore:
         self.completed_dir.mkdir(parents=True, exist_ok=True)
 
     def save_queue(self, records: list[TaskRecord]) -> None:
-        """保存队列到 queue.json。"""
+        """대기열을 queue.json에 저장한다."""
         data = [r.to_dict() for r in records]
         self.queue_file.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
@@ -130,7 +126,7 @@ class StateStore:
         )
 
     def load_queue(self) -> list[TaskRecord]:
-        """从 queue.json 加载队列。"""
+        """queue.json에서 대기열을 로드한다."""
         if not self.queue_file.exists():
             return []
         text = self.queue_file.read_text(encoding="utf-8")
@@ -139,7 +135,7 @@ class StateStore:
         return [TaskRecord.from_dict(d) for d in json.loads(text)]
 
     def save_active(self, record: TaskRecord) -> None:
-        """将进行中的任务保存到 active/ 目录。"""
+        """진행 중인 태스크를 active/ 디렉토리에 저장한다."""
         path = self.active_dir / f"issue-{record.issue_number}.json"
         path.write_text(
             json.dumps(record.to_dict(), ensure_ascii=False, indent=2),
@@ -147,7 +143,7 @@ class StateStore:
         )
 
     def load_active(self, issue_number: int) -> TaskRecord | None:
-        """从 active/ 目录加载任务。"""
+        """active/ 디렉토리에서 태스크를 로드한다."""
         path = self.active_dir / f"issue-{issue_number}.json"
         if not path.exists():
             return None
@@ -155,7 +151,7 @@ class StateStore:
         return TaskRecord.from_dict(data)
 
     def move_to_completed(self, record: TaskRecord) -> None:
-        """从 active 移动到 completed。"""
+        """active에서 completed로 이동한다."""
         active_path = self.active_dir / f"issue-{record.issue_number}.json"
         completed_path = self.completed_dir / f"issue-{record.issue_number}.json"
         completed_path.write_text(
@@ -166,7 +162,7 @@ class StateStore:
             active_path.unlink()
 
     def list_active(self) -> list[TaskRecord]:
-        """加载 active/ 目录下的所有任务。"""
+        """active/ 디렉토리의 모든 태스크를 로드한다."""
         records: list[TaskRecord] = []
         for path in sorted(self.active_dir.glob("issue-*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -191,13 +187,13 @@ class StateStore:
         return orphaned
 
     def remove_from_queue(self, issue_number: int) -> None:
-        """从队列中移除指定 issue。"""
+        """대기열에서 특정 이슈를 제거한다."""
         queue = self.load_queue()
         queue = [r for r in queue if r.issue_number != issue_number]
         self.save_queue(queue)
 
 
-# --- Orchestrator ---
+# --- 오케스트레이터 ---
 
 
 class Orchestrator:
@@ -230,7 +226,7 @@ class Orchestrator:
         self._stop_event = asyncio.Event()
 
     def enqueue(self, issue: Issue) -> TaskRecord:
-        """添加 issue 到队列。"""
+        """이슈를 대기열에 추가한다."""
         record = TaskRecord(
             issue_number=issue.number,
             issue_title=issue.title,
@@ -242,15 +238,15 @@ class Orchestrator:
         existing = {r.issue_number for r in queue}
         active_numbers = {r.issue_number for r in self.store.list_active()}
         if issue.number in existing or issue.number in active_numbers:
-            raise ValueError(f"Issue #{issue.number} is already in queue or active")
+            raise ValueError(f"이슈 #{issue.number}는 이미 큐 또는 활성 상태입니다")
 
         queue.append(record)
         self.store.save_queue(queue)
         return record
 
     async def dispatch_one(self, issue: Issue) -> TaskRecord:
-        """处理单个 issue（从 QUEUED 到最终状态）。"""
-        # 从队列查找记录或新建
+        """단일 이슈를 처리한다 (QUEUED → 최종 상태까지)."""
+        # 큐에서 레코드 찾기 또는 새로 생성
         queue = self.store.load_queue()
         record = next(
             (r for r in queue if r.issue_number == issue.number),
@@ -268,12 +264,12 @@ class Orchestrator:
         return record
 
     async def _process_issue(self, record: TaskRecord, issue: Issue) -> None:
-        """管理单个 issue 的完整生命周期。"""
+        """이슈 한 건의 전체 생애주기를 관리한다."""
         async with self._semaphore:
             await self._run_with_retries(record, issue)
 
     async def _run_with_retries(self, record: TaskRecord, issue: Issue) -> None:
-        """包含重试逻辑的执行。"""
+        """재시도 로직을 포함한 실행."""
         while True:
             record.attempt += 1
 
@@ -285,7 +281,7 @@ class Orchestrator:
             )
             self.store.save_active(record)
 
-            # 准备 workspace
+            # 워크스페이스 준비
             branch_name = f"feat/issue-{issue.number}"
             try:
                 wt_path = await self.workspace.create_worktree(
@@ -293,13 +289,13 @@ class Orchestrator:
                 )
                 record.worktree_path = str(wt_path)
             except Exception as e:
-                record.error = f"Workspace creation failed: {e}"
+                record.error = f"워크스페이스 생성 실패: {e}"
                 record.transition(TaskState.FAILED)
                 self.store.save_active(record)
                 self._handle_failure(record)
                 return
 
-            # 钩子：before_run
+            # 훅: before_run
             context = self._build_context(issue, record.attempt)
             hooks = render_hooks(self.workflow.hooks, context)
             if hooks.get("before_run"):
@@ -309,7 +305,7 @@ class Orchestrator:
             record.transition(TaskState.RUNNING)
             self.store.save_active(record)
 
-            # 渲染 prompt + 执行 agent
+            # 프롬프트 렌더링 + 에이전트 실행
             prompt = render_workflow(self.workflow, context)
             agent_config = {
                 "model": self.config.agent.model,
@@ -353,8 +349,25 @@ class Orchestrator:
                     )
                     await self.notifier.notify("succeeded", task_result)
 
-                # PR creation is handled by the agent (land skill) inside the Claude session
-                # Orchestrator only manages the task lifecycle
+                # Push branch and create PR
+                if self.tracker:
+                    try:
+                        branch_name = f"feat/issue-{issue.number}"
+                        pr_url = await self._push_and_create_pr(
+                            wt_path, branch_name, issue
+                        )
+                        if pr_url:
+                            record.pr_url = pr_url
+                            record.transition(TaskState.PR_CREATED)
+                            self.store.save_active(record)
+                            # Update issue labels
+                            await self.tracker.update_labels(
+                                issue.number,
+                                add_labels=["symphony:done"],
+                                remove_labels=["symphony:in-progress", "symphony:ready"],
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to create PR: %s", e)
 
                 # Hook: after_run
                 if hooks.get("after_run"):
@@ -396,12 +409,12 @@ class Orchestrator:
                     )
                     await self.notifier.notify("failed", task_result)
 
-                # 重试等待
+                # 재시도 대기
                 delay = self.config.agent.retry_delay_s * record.attempt
                 await asyncio.sleep(delay)
 
     def _handle_failure(self, record: TaskRecord) -> bool:
-        """失败处理。可重试返回 True，需要 escalation 返回 False。"""
+        """실패 처리. 재시도 가능하면 True, 에스컬레이션이면 False."""
         if record.attempt < record.max_retries:
             record.transition(TaskState.RETRYING)
             self.store.save_active(record)
@@ -412,7 +425,7 @@ class Orchestrator:
             return False
 
     def _build_context(self, issue: Issue, attempt: int) -> dict[str, Any]:
-        """生成用于模板渲染的 context。"""
+        """템플릿 렌더링용 context를 생성한다."""
         ctx: dict[str, Any] = {
             "issue": {
                 "number": issue.number,
@@ -434,8 +447,48 @@ class Orchestrator:
         )
         await proc.communicate()
 
+    async def _push_and_create_pr(
+        self,
+        worktree_path: Path,
+        branch_name: str,
+        issue: Issue,
+    ) -> str | None:
+        """Push branch to origin and create PR. Returns PR URL."""
+        if not self.tracker:
+            return None
+
+        # Push to tracker repo using full URL (worktree may have wrong remote)
+        remote_url = f"https://github.com/{self.tracker.repo}.git"
+        proc = await asyncio.create_subprocess_exec(
+            "git", "push", remote_url, f"HEAD:{branch_name}",
+            cwd=worktree_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            logger.warning("Git push failed: %s", error_msg)
+            return None
+
+        # Create PR using tracker
+        try:
+            pr_body = issue.body[:500] if issue.body else f"Resolves #{issue.number}"
+            pr_url = await self.tracker.create_pr(
+                issue_number=issue.number,
+                branch=branch_name,
+                title=issue.title,
+                body=pr_body,
+            )
+            logger.info("Created PR: %s", pr_url)
+            return pr_url
+        except Exception as e:
+            logger.warning("Failed to create PR: %s", e)
+            return None
+
     def get_status(self) -> dict[str, Any]:
-        """返回当前状态摘要。"""
+        """현재 상태 요약을 반환한다."""
         queue = self.store.load_queue()
         active = self.store.list_active()
         return {
@@ -446,7 +499,7 @@ class Orchestrator:
         }
 
     def stop(self) -> None:
-        """Orchestrator 停止信号。"""
+        """오케스트레이터 중지 신호."""
         self._stop_event.set()
 
     @property
