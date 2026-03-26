@@ -110,6 +110,7 @@ class SDKAgentRunner:
             allowed_tools=tools,
             permission_mode="acceptEdits",
             cwd=str(worktree_path),
+            system_prompt={"type": "preset", "preset": "claude_code"},
             setting_sources=["project"],
             include_partial_messages=True,
             can_use_tool=_block_pr_merge,
