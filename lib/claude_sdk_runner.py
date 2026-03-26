@@ -11,7 +11,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, AsyncIterable, Callable, Optional
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ResultMessage
@@ -116,10 +116,14 @@ class SDKAgentRunner:
             can_use_tool=_block_pr_merge,
         )
 
+        # Wrap prompt as AsyncIterable for streaming mode (required by can_use_tool)
+        async def _prompt_stream() -> AsyncIterable[str]:
+            yield prompt
+
         async def _run_with_timeout() -> None:
             """Run query iteration with timeout wrapper."""
             msg_count = 0
-            async for message in query(prompt=prompt, options=options):
+            async for message in query(prompt=_prompt_stream(), options=options):
                 msg_count += 1
                 # Use type().__name__ to get class name (e.g., "AssistantMessage")
                 msg_type = type(message).__name__
