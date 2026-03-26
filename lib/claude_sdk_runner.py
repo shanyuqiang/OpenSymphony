@@ -11,12 +11,17 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterable, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ResultMessage
 
 logger = logging.getLogger(__name__)
+
+
+async def _dummy_hook(input_data, tool_use_id, context):
+    """Dummy hook required to keep stream open when using can_use_tool."""
+    return {"continue_": True}
 
 
 def _block_pr_merge(tool_name: str, tool_input: dict) -> dict:
@@ -73,7 +78,7 @@ class SDKAgentRunner:
         issue_id: Optional[int] = None,
     ) -> RunResult:
         """Run agent using Claude Agent SDK and return result."""
-        from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, ResultMessage, query
 
         model = config.get("model", "opus")
         max_budget = config.get("max_budget_usd", 5)
@@ -114,11 +119,15 @@ class SDKAgentRunner:
             setting_sources=["project"],
             include_partial_messages=True,
             can_use_tool=_block_pr_merge,
+            hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_hook])]},
         )
 
-        # Wrap prompt as AsyncIterable for streaming mode (required by can_use_tool)
-        async def _prompt_stream() -> AsyncIterable[str]:
-            yield prompt
+        # Prompt as AsyncIterable with proper message format for streaming mode
+        async def _prompt_stream():
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": prompt},
+            }
 
         async def _run_with_timeout() -> None:
             """Run query iteration with timeout wrapper."""
