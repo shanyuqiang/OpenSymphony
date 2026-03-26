@@ -1,0 +1,39 @@
+tracker:
+  kind: github
+  repo: shanyuqiang/OpenSymphony
+  trigger_label: "symphony:ready"
+  active_labels:
+    - "symphony:in-progress"
+  terminal_labels:
+    - "symphony:done"
+    - "symphony:failed"
+
+polling:
+  interval_s: 30
+
+workspace:
+  root: ~/symphony-workspaces
+
+agent:
+  max_concurrent: 2
+  max_retries: 3
+  retry_delay_s: 60
+  max_budget_usd: 5
+  model: opus
+  allowed_tools: "Bash(*),Read(*),Write(*),Edit(*),Glob(*),Grep(*),Skill(*)"
+
+hooks:
+  after_create: |
+    git checkout -b feat/issue-{{issue.number}} origin/main
+  before_run: |
+    git pull origin main --rebase
+  after_run: |
+    echo "Issue #{{issue.number}} completed at $(date)"
+
+notifier:
+  github_comment: true
+  slack_webhook_url: ""
+  events:
+    - succeeded
+    - failed
+    - escalated

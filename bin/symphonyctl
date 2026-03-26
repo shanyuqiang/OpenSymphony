@@ -1,0 +1,14 @@
+#!/bin/bash
+# Symphony-CC CLI wrapper
+# 프로젝트 루트에서 lib.cli 모듈을 실행한다.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_ROOT" || exit 1
+# Use venv python if available, otherwise fall back to system python3
+if [ -f ".venv/bin/python" ]; then
+    exec .venv/bin/python -c "from lib.cli import main; exit(main())" "$@"
+else
+    exec python3 -c "from lib.cli import main; exit(main())" "$@"
+fi
