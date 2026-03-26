@@ -233,6 +233,8 @@ class TestSDKRunnerOptions:
         mock_result.result = "Done"
 
         async def mock_query(prompt, options):
+            # prompt is now an async generator (streaming mode)
+            assert hasattr(prompt, "__aiter__")
             captured_options["prompt"] = prompt
             captured_options["options"] = options
             yield mock_result
@@ -248,7 +250,7 @@ class TestSDKRunnerOptions:
                 },
             )
 
-        assert captured_options["prompt"] == "Custom prompt"
+        # prompt is now an async generator, not a string
         opts = captured_options["options"]
         assert opts.model == "sonnet"
         assert opts.max_budget_usd == 10
