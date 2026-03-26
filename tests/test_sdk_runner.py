@@ -277,3 +277,23 @@ class TestSDKIntegration:
         assert opts.model == "opus"
         assert opts.max_budget_usd == 1
 
+    @pytest.mark.asyncio
+    async def test_sdk_runner_smoke_test(self) -> None:
+        """Real SDK runner smoke test - verifies can_use_tool streaming mode works."""
+        from lib.claude_sdk_runner import SDKAgentRunner
+
+        runner = SDKAgentRunner(timeout_s=60)
+        result = await runner.run(
+            prompt="Run: echo smoke_test_ok",
+            worktree_path=Path("/tmp"),
+            config={
+                "model": "opus",
+                "max_budget_usd": 0.01,
+                "allowed_tools": ["Bash", "Read"],
+            },
+            issue_id=None,
+        )
+        # Success means streaming mode + can_use_tool worked without error
+        assert result.success is True, f"SDK runner failed: {result.output}"
+        assert result.cost_usd > 0, "Should have incurred some cost"
+
