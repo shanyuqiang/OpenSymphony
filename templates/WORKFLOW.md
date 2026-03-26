@@ -28,6 +28,8 @@ hooks:
 
 You are working on GitHub issue #{{issue.number}}.
 
+**IMPORTANT: Work in the current directory. All files must be created/edited relative to the current working directory. DO NOT use absolute paths outside this directory.**
+
 Title: {{issue.title}}
 Body: {{issue.body}}
 
